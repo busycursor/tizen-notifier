@@ -45,6 +45,14 @@ namespace TizenNotifier
         public static Dictionary<string, object> Text(double x, double y, double w, double h, string text, double px, string color,
             string weight = null, string align = "left", string valign = "center", bool multiline = false)
         {
+            // the TV's font needs about 1.35x its size per line; a shorter box makes a single ellipsised line vanish
+            double minH = px * 1.35;
+            if (!multiline && h < minH)
+            {
+                double grow = minH - h;
+                if (valign == "center") y -= grow / 2; else if (valign == "bottom") y -= grow;
+                h = minH;
+            }
             var d = new Dictionary<string, object>
             {
                 ["type"] = "text", ["x"] = x, ["y"] = y, ["w"] = Math.Max(1, w), ["h"] = Math.Max(1, h), ["text"] = text ?? "", ["pixel_size"] = px,

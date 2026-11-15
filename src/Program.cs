@@ -171,6 +171,13 @@ namespace TizenNotifier
             Log.W("start v" + Cfg.Version + " runtime " + Environment.Version);
             try { Cfg.Load(); } catch (Exception e) { Log.W("config load failed: " + e.Message); }
             Mdi.File = System.IO.Path.Combine(Cfg.ResDir, "mdi.tsv.gz");
+            // bundled fonts (res/fonts): the TV itself ships only Samsung's own family
+            try
+            {
+                var fd = System.IO.Path.Combine(Cfg.ResDir, "fonts");
+                if (Directory.Exists(fd)) Log.W("fonts " + fd + ": " + Tizen.NUI.FontClient.Instance.AddCustomFontDirectory(fd));
+            }
+            catch (Exception e) { Log.W("fonts: " + e.Message); }
             try { if (Directory.Exists(System.IO.Path.Combine(Cfg.DataDir, "svg"))) Directory.Delete(System.IO.Path.Combine(Cfg.DataDir, "svg"), true); } catch (Exception) { }
             foreach (var f in Directory.GetFiles(Cfg.DataDir, "media-*")) { try { File.Delete(f); } catch (Exception) { } }
 

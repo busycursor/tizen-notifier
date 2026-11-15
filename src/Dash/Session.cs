@@ -45,7 +45,7 @@ namespace TizenNotifier
     }
 
     internal sealed class Forecast { public DateTime Time; public string Condition; public double? Hi, Lo, Precip; }
-    internal sealed class CalEvent { public DateTime Start, End; public bool AllDay; public string Summary, Calendar, Color; }
+    internal sealed class CalEvent { public DateTime Start, End; public bool AllDay; public string Summary, Calendar, Color, CalendarId; }
 
     internal sealed partial class DashSession : IDisposable
     {
@@ -59,6 +59,8 @@ namespace TizenNotifier
         public Dictionary<string, object> Config;
         public Dictionary<string, object> Icons = new Dictionary<string, object>();
         public Dictionary<string, Dictionary<string, object>> Registry = new Dictionary<string, Dictionary<string, object>>();
+        public Dictionary<string, Dictionary<string, object>> Areas = new Dictionary<string, Dictionary<string, object>>();
+        public Dictionary<string, string> DeviceArea = new Dictionary<string, string>();
         public string UserId, UserName;
         public TimeZoneInfo Tz = TimeZoneInfo.Local;
         public string ViewTitle;
@@ -126,6 +128,17 @@ namespace TizenNotifier
                 var rl = Json.A(Ha.Call(new Dictionary<string, object> { ["type"] = "config/entity_registry/list_for_display" }), "entities");
                 if (rl != null) foreach (var x in rl) if (x is Dictionary<string, object> d && Json.S(d, "ei") != null) reg[Json.S(d, "ei")] = d;
                 Registry = reg;
+                try
+                {
+                    var areas = new Dictionary<string, Dictionary<string, object>>();
+                    foreach (var a in (Ha.Call(new Dictionary<string, object> { ["type"] = "config/area_registry/list" }) as List<object>) ?? new List<object>())
+                        if (Json.S(a, "area_id") is string aid) areas[aid] = a as Dictionary<string, object>;
+                    var dev = new Dictionary<string, string>();
+                    foreach (var d in (Ha.Call(new Dictionary<string, object> { ["type"] = "config/device_registry/list" }) as List<object>) ?? new List<object>())
+                        if (Json.S(d, "id") is string did && Json.S(d, "area_id") is string da) dev[did] = da;
+                    Areas = areas; DeviceArea = dev;
+                }
+                catch (Exception e) { Host.Log("dash areas: " + e.Message); }
                 LoadConfig();
                 Ha.Subscribe(new Dictionary<string, object> { ["type"] = "subscribe_events", ["event_type"] = "lovelace_updated" }, ev =>
                 {
@@ -177,7 +190,12 @@ namespace TizenNotifier
                 states.Clear();
             }
             if (set.Count == 0) return;
-            int id = Ha.Subscribe(new Dictionary<string, object> { ["type"] = "subscribe_entities", ["entity_ids"] = set.Cast<object>().ToList() }, OnEntities);
+            // auto-entities filters over every entity, so such a view needs all of them
+            bool all = Json.Write(view).Contains("custom:auto-entities");
+            var msg = new Dictionary<string, object> { ["type"] = "subscribe_entities" };
+            if (!all) msg["entity_ids"] = set.Cast<object>().ToList();
+            else lock (L) entSet = new HashSet<string> { "*" };
+            int id = Ha.Subscribe(msg, OnEntities);
             lock (L) entSub = id;
         }
 
@@ -224,7 +242,6 @@ namespace TizenNotifier
                 foreach (var kv in history)
                     if (kv.Key.StartsWith(e.Id + "|") && kv.Value.t.Count > 0 && e.LastUpdated > kv.Value.t[kv.Value.t.Count - 1])
                     { kv.Value.t.Add(e.LastUpdated); kv.Value.v.Add(e.Num.Value); }
-            if (calendars.TryGetValue(e.Id, out var cal) && cal.state != e.State) calendars[e.Id] = (cal.ev, DateTime.MinValue, e.State, cal.busy, cal.used);
         }
 
         public Dictionary<string, object> CurrentView()
@@ -242,6 +259,7 @@ namespace TizenNotifier
         // ---------------- data access for cards (called under L during a render) ----------------
 
         public Ent State(string id) => id != null && states.TryGetValue(id, out var e) ? e : null;
+        public IEnumerable<string> AllEntityIds() => states.Keys.ToList();
         public string EffectiveUser => Opt.AsUser ?? UserId;
         public DateTime NowUtc => DateTime.UtcNow;
         public DateTime NowLocal => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Tz);
@@ -354,34 +372,38 @@ namespace TizenNotifier
             });
         }
 
-        // Upcoming events of these calendars for `days` days (refetched every 15 minutes or when a calendar changes).
-        public List<CalEvent> Events(IList<(string id, string color)> cals, int days)
+        // Events of these calendars from `from` (local date, default today) for `days` days. Refetched every 15 minutes or
+        // when a calendar's state changes; each (calendar, range) is cached separately.
+        public List<CalEvent> Events(IList<(string id, string color)> cals, int days, DateTime? from = null)
         {
+            var start = (from ?? NowLocal).Date;
             var all = new List<CalEvent>();
             foreach (var (id, color) in cals)
             {
-                if (calendars.TryGetValue(id, out var c))
+                string key = id + "|" + start.ToString("yyyy-MM-dd") + "|" + days;
+                string st = State(id)?.State;
+                if (calendars.TryGetValue(key, out var c))
                 {
-                    calendars[id] = (c.ev, c.fetched, c.state, c.busy, true);
-                    if (!c.busy && (DateTime.UtcNow - c.fetched).TotalMinutes > 15) FetchCalendar(id, days, color);
+                    if (c.state != st) c.fetched = DateTime.MinValue;
+                    calendars[key] = (c.ev, c.fetched, st, c.busy, true);
+                    if (!c.busy && (DateTime.UtcNow - c.fetched).TotalMinutes > 15) FetchCalendar(key, id, start, days, color);
                     if (c.ev != null) all.AddRange(c.ev);
                 }
-                else { calendars[id] = (null, DateTime.MinValue, State(id)?.State, false, true); FetchCalendar(id, days, color); }
+                else { calendars[key] = (null, DateTime.MinValue, st, false, true); FetchCalendar(key, id, start, days, color); }
             }
             return all.OrderBy(x => x.Start).ToList();
         }
 
-        private void FetchCalendar(string id, int days, string color)
+        private void FetchCalendar(string key, string id, DateTime startLocal, int days, string color)
         {
-            if (calendars.TryGetValue(id, out var c0)) calendars[id] = (c0.ev, c0.fetched, c0.state, true, c0.used);
-            var nowL = NowLocal.Date;
+            if (calendars.TryGetValue(key, out var c0)) calendars[key] = (c0.ev, c0.fetched, c0.state, true, c0.used);
             Task.Run(() =>
             {
                 var list = new List<CalEvent>();
                 try
                 {
-                    var start = TimeZoneInfo.ConvertTimeToUtc(nowL, Tz).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
-                    var end = TimeZoneInfo.ConvertTimeToUtc(nowL.AddDays(days), Tz).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+                    var start = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startLocal, DateTimeKind.Unspecified), Tz).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+                    var end = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(startLocal.AddDays(days), DateTimeKind.Unspecified), Tz).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
                     var r = Ha.Get("/api/calendars/" + id + "?start=" + Uri.EscapeDataString(start) + "&end=" + Uri.EscapeDataString(end));
                     string calName;
                     lock (L) calName = Format.Name(State(id), null);
@@ -389,7 +411,7 @@ namespace TizenNotifier
                         foreach (var ev in evs)
                         {
                             var s = Json.O(ev, "start"); var en = Json.O(ev, "end");
-                            var e = new CalEvent { Summary = Json.S(ev, "summary") ?? "", Calendar = calName, Color = color };
+                            var e = new CalEvent { Summary = Json.S(ev, "summary") ?? "", Calendar = calName, Color = color, CalendarId = id };
                             if (Json.S(s, "date") != null)
                             {
                                 e.AllDay = true;
@@ -405,9 +427,120 @@ namespace TizenNotifier
                         }
                 }
                 catch (Exception ex) { Host.Log("dash calendar " + id + ": " + ex.Message); }
-                lock (L) { if (calendars.TryGetValue(id, out var cur)) calendars[id] = (list, DateTime.UtcNow, cur.state, false, cur.used); }
+                lock (L) { if (calendars.TryGetValue(key, out var cur)) calendars[key] = (list, DateTime.UtcNow, cur.state, false, cur.used); }
                 Dirty();
             });
+        }
+
+        // ---- area membership (entity area, else its device's area) ----
+        public string AreaOf(string entityId)
+        {
+            if (!Registry.TryGetValue(entityId, out var r)) return null;
+            if (Json.S(r, "ai") is string a) return a;
+            return Json.S(r, "di") is string d && DeviceArea.TryGetValue(d, out var da) ? da : null;
+        }
+
+        public IEnumerable<string> EntitiesIn(string area) => Registry.Keys.Where(id => AreaOf(id) == area && Json.Get(Registry[id], "hb") == null && Json.Get(Registry[id], "ec") == null);
+
+        // ---- logbook (refreshed every minute, or when one of its entities changes) ----
+        private readonly Dictionary<string, (List<Dictionary<string, object>> rows, DateTime fetched, string sig, bool busy)> logbooks = new Dictionary<string, (List<Dictionary<string, object>>, DateTime, string, bool)>();
+
+        public List<Dictionary<string, object>> Logbook(IList<string> ids, double hours)
+        {
+            string key = string.Join(",", ids) + "|" + hours.ToString(CultureInfo.InvariantCulture);
+            string sig = string.Join(",", ids.Select(i => State(i)?.LastChanged.ToString(CultureInfo.InvariantCulture) ?? ""));
+            logbooks.TryGetValue(key, out var lb);
+            if (lb.rows == null || (!lb.busy && (lb.sig != sig || (DateTime.UtcNow - lb.fetched).TotalSeconds > 60)))
+            {
+                logbooks[key] = (lb.rows, lb.fetched, sig, true);
+                Task.Run(() =>
+                {
+                    var rows = new List<Dictionary<string, object>>();
+                    try
+                    {
+                        var r = Ha.Call(new Dictionary<string, object>
+                        {
+                            ["type"] = "logbook/get_events", ["entity_ids"] = ids.Cast<object>().ToList(),
+                            ["start_time"] = DateTime.UtcNow.AddHours(-hours).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+                        });
+                        if (r is List<object> l) rows = l.OfType<Dictionary<string, object>>().Reverse().ToList();   // newest first
+                    }
+                    catch (Exception e) { Host.Log("dash logbook: " + e.Message); }
+                    lock (L) logbooks[key] = (rows, DateTime.UtcNow, sig, false);
+                    Dirty();
+                });
+            }
+            return lb.rows;
+        }
+
+        // ---- a camera's live stream (HA HLS URL with its own token; HA returns the same URL while the stream is in use) ----
+        private readonly Dictionary<string, (string url, DateTime fetched, bool busy)> streams = new Dictionary<string, (string, DateTime, bool)>();
+
+        public string CameraStream(string entityId)
+        {
+            if (entityId == null || !entityId.StartsWith("camera.")) return null;
+            streams.TryGetValue(entityId, out var st);
+            if (!st.busy && (st.fetched == default(DateTime) || (DateTime.UtcNow - st.fetched).TotalSeconds > (st.url == null ? 120 : 60)))
+            {
+                streams[entityId] = (st.url, st.fetched, true);
+                Task.Run(() =>
+                {
+                    string url = null;
+                    try { url = Json.S(Ha.Call(new Dictionary<string, object> { ["type"] = "camera/stream", ["entity_id"] = entityId }), "url"); }
+                    catch (Exception e) { Host.Log("dash camera stream " + entityId + ": " + e.Message); }
+                    bool changed;
+                    lock (L) { changed = st.url != url; streams[entityId] = (url, DateTime.UtcNow, false); }
+                    if (changed) Dirty();
+                });
+            }
+            return st.url == null ? null : (st.url.StartsWith("http") ? st.url : Ha.Url + st.url);
+        }
+
+        // ---- long-term statistics (refreshed every 5 minutes) ----
+        private readonly Dictionary<string, (object value, DateTime fetched, bool busy)> stats = new Dictionary<string, (object, DateTime, bool)>();
+
+        private object Stat(string key, Dictionary<string, object> msg)
+        {
+            stats.TryGetValue(key, out var st);
+            if (!st.busy && (st.value == null || (DateTime.UtcNow - st.fetched).TotalMinutes > 5))
+            {
+                stats[key] = (st.value, st.fetched, true);
+                Task.Run(() =>
+                {
+                    object v = null;
+                    try { v = Ha.Call(msg); } catch (Exception e) { Host.Log("dash statistics: " + e.Message); }
+                    lock (L) stats[key] = (v ?? new Dictionary<string, object>(), DateTime.UtcNow, false);
+                    Dirty();
+                });
+            }
+            return st.value;
+        }
+
+        // One value over a calendar period ("today", "this week" ...): stat = mean|min|max|change.
+        public double? StatisticValue(string id, string stat, string period)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                ["type"] = "recorder/statistic_during_period", ["statistic_id"] = id, ["types"] = new List<object> { stat },
+                ["calendar"] = new Dictionary<string, object> { ["period"] = period ?? "day" },
+            };
+            var v = Stat("one|" + id + "|" + stat + "|" + period, msg);
+            return Json.Get(v, stat) is double d ? d : (double?)null;
+        }
+
+        // Series of hourly / daily / ... values: each point (start unix s, value).
+        public List<(double t, double v)> StatisticSeries(string id, string period, string stat, double days)
+        {
+            var msg = new Dictionary<string, object>
+            {
+                ["type"] = "recorder/statistics_during_period", ["statistic_ids"] = new List<object> { id }, ["period"] = period,
+                ["types"] = new List<object> { stat }, ["start_time"] = DateTime.UtcNow.AddDays(-days).ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+            };
+            var v = Stat("series|" + id + "|" + period + "|" + stat + "|" + days.ToString(CultureInfo.InvariantCulture), msg);
+            var list = new List<(double, double)>();
+            foreach (var p in Json.A(v, id) ?? new List<object>())
+                if (Json.Get(p, stat) is double val) list.Add((Json.N(p, "start", 0) / 1000.0, val));
+            return list;
         }
 
         public List<Forecast> Forecasts(string id, string type)

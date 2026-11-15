@@ -86,6 +86,8 @@ namespace TizenNotifier
             if (e == null) return "mdi:help-circle-outline";
             var own = e.A("icon");
             if (!string.IsNullOrEmpty(own)) return own;
+            // groups (light groups, Hue rooms/zones) carry their members in entity_id: the frontend shows a group icon
+            if (e.Domain == "light" && Json.Get(e.Attr, "entity_id") is List<object> members && members.Count > 0) return "mdi:lightbulb-group";
             var dom = Json.O(icons, e.Domain);
             string dc = e.A("device_class");
             foreach (var key in new[] { dc, "_" })

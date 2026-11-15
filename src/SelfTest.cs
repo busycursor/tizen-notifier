@@ -156,9 +156,27 @@ namespace TizenNotifier
                         string.Join(",", t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly).Select(m => m.Name).Distinct()))
                     .Cast<object>().ToList();
             });
+            // fonts: can the app add its own font files?
+            T("nui_font_api", () =>
+            {
+                Type[] types;
+                try { types = nuiAsm.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+                return types.Where(t => t.Name.IndexOf("Font", StringComparison.OrdinalIgnoreCase) >= 0 && t.IsClass)
+                    .Select(t => t.FullName + (t.IsPublic ? "" : " [np]") + ": " + string.Join(",", t.GetMethods(all | System.Reflection.BindingFlags.DeclaredOnly)
+                        .Where(m => m.Name.IndexOf("Font", StringComparison.OrdinalIgnoreCase) >= 0 || m.Name.IndexOf("Directory", StringComparison.OrdinalIgnoreCase) >= 0 || m.Name.IndexOf("Path", StringComparison.OrdinalIgnoreCase) >= 0)
+                        .Select(m => m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")").Distinct().Take(25)))
+                    .Cast<object>().ToList();
+            });
+            T("system_font_families", () =>
+            {
+                var dirs = new[] { "/usr/share/fonts", "/usr/share/fallback_fonts", "/opt/usr/share/fonts" };
+                return dirs.Where(System.IO.Directory.Exists).SelectMany(d => System.IO.Directory.GetFiles(d, "*.*", System.IO.SearchOption.AllDirectories))
+                    .Select(f => System.IO.Path.GetFileNameWithoutExtension(f)).Select(n => n.Split('-')[0]).Distinct().OrderBy(n => n).Cast<object>().Take(80).ToList();
+            });
             T("tizen_assemblies", () => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetName().Name).Where(n => n.StartsWith("Tizen")).OrderBy(n => n).Cast<object>().ToList());
             return d;
         }
+
 
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void Audio()

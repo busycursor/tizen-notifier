@@ -653,9 +653,19 @@ and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user
 `docs/superpowers/specs/2026-11-15-lovelace-overlay-design.md`. In short:
 
 - Sections, masonry and panel views; view badges; `visibility` and `conditional` rules.
-- Cards: tile, entity, entities, glance, button, sensor (with graph), gauge, history-graph, markdown, heading, todo-list,
-  calendar (agenda), weather-forecast, clock, picture, picture-entity, picture-glance, camera, horizontal/vertical stack,
-  grid, entity-filter, Mushroom (template, entity, title, chips), better-moment, advanced-camera.
+- Built-in cards: tile, entity, entities, glance, button, sensor (with graph), gauge, history-graph, statistics-graph,
+  statistic, markdown (bold and italic), heading, todo-list, calendar (month grid, day and list views), weather-forecast,
+  clock, picture, picture-entity, picture-glance, camera, media-control, thermostat, light, alarm-panel, area, logbook,
+  horizontal/vertical stack, grid, conditional, entity-filter.
+- Custom cards: layout-card (grid with named areas, masonry, horizontal, vertical; also as `custom:*-layout` views),
+  auto-entities, week-planner-card, atomic-calendar-revive, calendar-card-pro, stack-in-card variants,
+  weather-chart-card, mini-graph-card, clock-weather-card, Mushroom (template, entity, title, chips, person, light,
+  lock, cover, climate, ...), better-moment-card, advanced-camera-card.
+- Layout follows the frontend: sections have 12 grid columns per view column they span, content-sized cards take one
+  row that grows to fit, and card default sizes match the frontend's. `tools/ha_screenshot.py` captures how Home
+  Assistant itself draws a dashboard, for side-by-side checks with `tools/preview.py`.
+- Camera cards play live through the relay (go2rtc's RTSP stream when the card names one, else Home Assistant's own
+  stream for the entity) and fall back to snapshots.
 - Read-only: taps do nothing and action-only cards are dropped. Unsupported cards are listed in `GET /dashboard`.
 - Options: `view` (index or path), `x`/`y`/`w`/`h` (region), `scale`, `theme` (`card_bg`, `text`, `secondary_text`,
   `accent`, `radius`, `card_opacity`), `persist` (default true: comes back after an app restart).

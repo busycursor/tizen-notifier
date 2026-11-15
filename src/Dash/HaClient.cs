@@ -20,6 +20,8 @@ namespace TizenNotifier
             "lovelace/config", "lovelace/dashboards/list", "render_template", "frontend/get_icons",
             "history/history_during_period", "todo/item/list", "weather/subscribe_forecast",
             "config/entity_registry/list_for_display", "subscribe_events",
+            "logbook/get_events", "recorder/statistic_during_period", "recorder/statistics_during_period",
+            "config/area_registry/list", "config/device_registry/list", "camera/stream",
         };
         private static readonly HashSet<string> Events = new HashSet<string> { "lovelace_updated" };   // subscribe_events types
 

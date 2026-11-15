@@ -82,7 +82,7 @@ namespace TizenNotifier
 
         // A line graph of values over a w x h box. min/max default to the data range (padded a little).
         public static string Graph(IList<double> xs, IList<double> ys, int w, int h, string color, double width, double fillOpacity,
-            double? min = null, double? max = null, double? x0 = null, double? x1 = null)
+            double? min = null, double? max = null, double? x0 = null, double? x1 = null, bool smooth = false)
         {
             var sb = new StringBuilder();
             sb.Append("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ").Append(w).Append(' ').Append(h).Append("\">");
@@ -101,17 +101,32 @@ namespace TizenNotifier
                     double y = inset + (1 - (ys[i] - lo) / (hi - lo)) * (h - 2 * inset);
                     pts.Add(N(Math.Max(0, Math.Min(w, x))) + "," + N(y));
                 }
+                string line = smooth ? Smooth(pts) : "M" + string.Join(" L", pts);
                 if (fillOpacity > 0)
                 {
                     var (hex, _) = Hex(color);
                     sb.Append("<path fill=\"").Append(hex).Append("\" fill-opacity=\"").Append(N(fillOpacity)).Append("\" d=\"M")
-                      .Append(pts[0].Split(',')[0]).Append(',').Append(h).Append(" L").Append(string.Join(" L", pts))
+                      .Append(pts[0].Split(',')[0]).Append(',').Append(h).Append(" L").Append(line.Substring(1))
                       .Append(" L").Append(pts[pts.Count - 1].Split(',')[0]).Append(',').Append(h).Append(" Z\"/>");
                 }
-                sb.Append("<polyline fill=\"none\" ").Append(Paint("stroke", color)).Append(" stroke-width=\"").Append(N(width))
-                  .Append("\" stroke-linejoin=\"round\" stroke-linecap=\"round\" points=\"").Append(string.Join(" ", pts)).Append("\"/>");
+                sb.Append("<path fill=\"none\" ").Append(Paint("stroke", color)).Append(" stroke-width=\"").Append(N(width))
+                  .Append("\" stroke-linejoin=\"round\" stroke-linecap=\"round\" d=\"").Append(line).Append("\"/>");
             }
             sb.Append("</svg>");
+            return sb.ToString();
+        }
+
+        // Catmull-Rom through the points, written as cubic Beziers ("M x,y C ...").
+        private static string Smooth(List<string> pts)
+        {
+            var p = pts.Select(s => { var a = s.Split(','); return (x: double.Parse(a[0], CultureInfo.InvariantCulture), y: double.Parse(a[1], CultureInfo.InvariantCulture)); }).ToList();
+            var sb = new StringBuilder("M").Append(N(p[0].x)).Append(',').Append(N(p[0].y));
+            for (int i = 0; i + 1 < p.Count; i++)
+            {
+                var p0 = p[Math.Max(0, i - 1)]; var p1 = p[i]; var p2 = p[i + 1]; var p3 = p[Math.Min(p.Count - 1, i + 2)];
+                double c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6, c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+                sb.Append(" C").Append(N(c1x)).Append(',').Append(N(c1y)).Append(' ').Append(N(c2x)).Append(',').Append(N(c2y)).Append(' ').Append(N(p2.x)).Append(',').Append(N(p2.y));
+            }
             return sb.ToString();
         }
 
@@ -132,6 +147,41 @@ namespace TizenNotifier
                 sb.Append("<path fill=\"none\" ").Append(Paint("stroke", color)).Append(" stroke-width=\"").Append(N(sw)).Append("\" d=\"").Append(Arc(fraction)).Append("\"/>");
             sb.Append("</svg>");
             return sb.ToString();
+        }
+
+        // A 270-degree ring (thermostat / light): track, then the value arc from the start.
+        public static string Ring(double fraction, string color, string track, double strokeFrac = 0.09)
+        {
+            fraction = Math.Max(0, Math.Min(1, fraction));
+            double cx = 50, cy = 50, r = 42, sw = 100 * strokeFrac;
+            string Arc(double f)
+            {
+                double a0 = 135 * Math.PI / 180, a1 = (135 + 270 * f) * Math.PI / 180;
+                double x0 = cx + r * Math.Cos(a0), y0 = cy + r * Math.Sin(a0), x1 = cx + r * Math.Cos(a1), y1 = cy + r * Math.Sin(a1);
+                return "M" + N(x0) + "," + N(y0) + " A" + N(r) + "," + N(r) + " 0 " + (270 * f > 180 ? 1 : 0) + ",1 " + N(x1) + "," + N(y1);
+            }
+            var sb = new StringBuilder("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\">");
+            sb.Append("<path fill=\"none\" stroke-linecap=\"round\" ").Append(Paint("stroke", track)).Append(" stroke-width=\"").Append(N(sw)).Append("\" d=\"").Append(Arc(1)).Append("\"/>");
+            if (fraction > 0.003) sb.Append("<path fill=\"none\" stroke-linecap=\"round\" ").Append(Paint("stroke", color)).Append(" stroke-width=\"").Append(N(sw)).Append("\" d=\"").Append(Arc(fraction)).Append("\"/>");
+            return sb.Append("</svg>").ToString();
+        }
+
+        // Vertical bars over a w x h box (statistics), values scaled from min(0, lo) to hi.
+        public static string Bars(IList<double> vals, int w, int h, string color)
+        {
+            var sb = new StringBuilder("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ").Append(w).Append(' ').Append(h).Append("\">");
+            if (vals.Count > 0)
+            {
+                double lo = Math.Min(0, vals.Min()), hi = Math.Max(vals.Max(), lo + 1e-9);
+                double bw = (double)w / vals.Count, gap = Math.Max(1, bw * 0.2);
+                for (int i = 0; i < vals.Count; i++)
+                {
+                    double bh = (vals[i] - lo) / (hi - lo) * (h - 2);
+                    sb.Append("<rect ").Append(Paint("fill", color)).Append(" x=\"").Append(N(i * bw + gap / 2)).Append("\" y=\"").Append(N(h - bh)).Append("\" width=\"")
+                      .Append(N(Math.Max(1, bw - gap))).Append("\" height=\"").Append(N(Math.Max(0, bh))).Append("\" rx=\"").Append(N(Math.Min(3, bw / 4))).Append("\"/>");
+                }
+            }
+            return sb.Append("</svg>").ToString();
         }
 
         public static string Circle(string color) =>

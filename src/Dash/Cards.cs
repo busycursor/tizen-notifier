@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 
 namespace TizenNotifier
 {
-    internal static class Cards
+    internal static partial class Cards
     {
         private static readonly HashSet<string> ActionDomains = new HashSet<string> { "button", "input_button", "script", "scene", "automation" };
 
@@ -28,6 +28,9 @@ namespace TizenNotifier
         // The card to actually draw: unwraps `conditional`, drops action-only and unsupported cards (null = nothing).
         public static Dictionary<string, object> Effective(Ctx c, Dictionary<string, object> cfg)
         {
+            var tr = Translate(c, cfg);
+            if (tr == null) return null;
+            if (!ReferenceEquals(tr, cfg)) return Effective(c, tr);
             string t = T(cfg);
             if (t == "conditional")
             {
@@ -38,7 +41,7 @@ namespace TizenNotifier
                 if (!Json.Has(inner, "grid_options") && Json.Has(cfg, "grid_options")) inner["grid_options"] = cfg["grid_options"];
                 return Effective(c, inner);
             }
-            if (!Known.Contains(t)) { c.Unsupported(t); return null; }
+            if (!Known.Contains(t) && !HasMore(t) && !HasCustom(t)) { c.Unsupported(t); return null; }
             if ((t == "button" || t == "tile" || t == "entity" || t.StartsWith("custom:mushroom-entity")) && Json.S(cfg, "entity") is string eid && ActionDomains.Contains(eid.Split('.')[0])) return null;
             if (t == "button" && Json.S(cfg, "entity") == null && Json.S(cfg, "name") == null && Json.S(cfg, "icon") == null) return null;
             return cfg;
@@ -53,17 +56,19 @@ namespace TizenNotifier
             int cols = dc, rows = dr;
             object gcol = Json.Get(go, "columns") ?? (Json.Get(lo, "grid_columns") is double lc ? (object)(lc * 3) : Json.Get(lo, "grid_columns"));
             object grow = Json.Get(go, "rows") ?? Json.Get(lo, "grid_rows");
-            if (gcol is double gd) cols = (int)gd; else if (gcol as string == "full") cols = 12;
+            if (gcol is double gd) cols = (int)gd; else if (gcol as string == "full") cols = 0;   // 0 = full width
             if (grow is double rd) rows = (int)rd; else if (grow as string == "auto") rows = 0;
             return (cols, rows);
         }
 
         private static (int, int) Default(Ctx c, Dictionary<string, object> cfg)
         {
+            var more = DefaultMore(cfg) ?? DefaultCustom(cfg);
+            if (more != null) return more.Value;
             switch (T(cfg))
             {
                 case "tile": return (6, Json.B(cfg, "vertical", false) ? 2 : 1);
-                case "button": return (3, 2);
+                case "button": return (6, 2);
                 case "entity": case "sensor": return (6, 2);
                 case "gauge": return (6, 3);
                 case "clock":
@@ -74,7 +79,7 @@ namespace TizenNotifier
                 case "custom:mushroom-media-player-card":
                     return (6, Json.S(cfg, "layout") == "vertical" ? 2 : 1);
             }
-            return (12, 0);
+            return (0, 0);   // full width, height by content
         }
 
         // ---------- measuring (content-sized cards) ----------
@@ -82,6 +87,8 @@ namespace TizenNotifier
         public static double Height(Ctx c, Dictionary<string, object> cfg, double w)
         {
             var P = c.P;
+            var hm = HeightMore(c, cfg, w) ?? HeightCustom(c, cfg, w);
+            if (hm != null) return hm.Value;
             switch (T(cfg))
             {
                 case "tile": return Json.B(cfg, "vertical", false) ? 120 : 56;
@@ -104,8 +111,8 @@ namespace TizenNotifier
                 }
                 case "markdown":
                 {
-                    double h = 2 * P.Pad + (Json.S(cfg, "title") != null ? 40 : 0);
-                    foreach (var b in Markdown(c, cfg)) h += Ui.Lines(b.text, b.px, w - 2 * P.Pad) * b.px * 1.35 + b.after;
+                    double h = 32 + (Json.S(cfg, "title") != null ? 48 : 0);
+                    foreach (var b in Markdown(c, cfg)) h += Ui.Lines(Plain(b.text), b.px, w - 32) * b.px * 1.5 + b.after;
                     return h;
                 }
                 case "heading": return Json.S(cfg, "heading_style") == "subtitle" ? 32 : 40;
@@ -131,8 +138,10 @@ namespace TizenNotifier
                     if (Json.B(cfg, "show_forecast", true)) h += 104;
                     return h;
                 }
-                case "history-graph": case "statistics-graph":
+                case "history-graph":
                     return 2 * P.Pad + (Json.S(cfg, "title") != null ? 40 : 0) + 160 + 28;
+                case "statistics-graph":
+                    return 2 * P.Pad + (Json.S(cfg, "title") != null ? 40 : 0) + 14 + 174 + 52;
                 case "picture": case "picture-entity": case "picture-glance": case "camera": case "custom:advanced-camera-card": case "custom:frigate-card":
                     return w / Aspect(cfg);
                 case "horizontal-stack":
@@ -186,6 +195,8 @@ namespace TizenNotifier
 
         public static Dictionary<string, object> Draw(Ctx c, Dictionary<string, object> cfg, double w, double h)
         {
+            var dm = DrawMore(c, cfg, w, h) ?? DrawCustom(c, cfg, w, h);
+            if (dm != null) { c.S.CardsDrawn++; return dm; }
             Dictionary<string, object> n;
             switch (T(cfg))
             {
@@ -256,7 +267,8 @@ namespace TizenNotifier
                 return card;
             }
             double ib = 36, iy = (Math.Min(h, 56) - ib) / 2;
-            Ui.Add(card, pic != null ? Ui.Image(10, iy, ib, ib, pic, ib / 2) : Ui.IconBadge(10, iy, ib, icon, col, active));
+            Ui.Add(card, pic != null ? Ui.Image(10, iy, ib, ib, pic, ib / 2) : Ui.Icon(10 + 6, iy + 6, 24, icon, active ? col : "#c8c8c8"));
+            TileBadge(c, card, e, 10 + ib - 12, iy - 4);
             double tx = 10 + ib + 10, tw = w - tx - 10;
             if (state != null)
             {
@@ -265,6 +277,22 @@ namespace TizenNotifier
             }
             else Ui.Add(card, Ui.Text(tx, iy, tw, ib, name, 14, P.Text, "medium"));
             return card;
+        }
+
+        // The small badge on a tile's icon: unavailable "!", a climate entity's current action.
+        private static void TileBadge(Ctx c, Dictionary<string, object> card, Ent e, double x, double y)
+        {
+            string icon = null, bg = null;
+            if (e == null || e.State == "unavailable") { icon = "mdi:exclamation-thick"; bg = Theme.Named["orange"]; }
+            else if (e.Domain == "climate" && e.A("hvac_action") is string act)
+            {
+                icon = act == "heating" ? "mdi:fire" : act == "cooling" ? "mdi:snowflake" : act == "drying" ? "mdi:water-percent" : act == "fan" ? "mdi:fan" : act == "off" ? "mdi:power" : "mdi:clock-outline";
+                bg = act == "heating" ? Theme.Named["deep-orange"] : act == "cooling" ? Theme.Named["blue"] : "#9e9e9e";
+            }
+            if (icon == null) return;
+            var b = Ui.Box(x, y, 16, 16, bg, 8);
+            Ui.Add(b, Ui.Icon(2, 2, 12, icon, "#ffffff"));
+            Ui.Add(card, b);
         }
 
         private static string StateContent(Ctx c, Ent e, object sc)
@@ -334,8 +362,8 @@ namespace TizenNotifier
             }
             else { val = e == null ? "Not found" : c.S.StateText(e); unit = null; }
             double vy = P.Pad + 26;
-            Ui.Add(card, Ui.Text(P.Pad + 4, vy, Ui.Width(val, 30, true) + 8, 38, val, 30, P.Text, "medium"));
-            if (!string.IsNullOrEmpty(unit)) Ui.Add(card, Ui.Text(P.Pad + 12 + Ui.Width(val, 30, true), vy + 10, w - 2 * P.Pad - Ui.Width(val, 30, true), 26, unit, 16, P.Secondary));
+            Ui.Add(card, Ui.Text(P.Pad + 4, vy, Ui.Width(val, 30) + 8, 38, val, 30, P.Text));
+            if (!string.IsNullOrEmpty(unit)) Ui.Add(card, Ui.Text(P.Pad + 8 + Ui.Width(val, 30), vy + 10, w - 2 * P.Pad - Ui.Width(val, 30), 26, unit, 16, P.Secondary));
             if (graph && e != null && Json.S(cfg, "graph") != "none" && Json.Has(cfg, "graph"))
             {
                 double hours = Json.N(cfg, "hours_to_show", 24);
@@ -346,7 +374,7 @@ namespace TizenNotifier
                     double now = (c.S.NowUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalSeconds;
                     var (gt, gv) = Smooth(t, v, now - hours * 3600, now, Math.Max(8, (int)(w / 6)), (int)Json.N(cfg, "detail", 1));
                     string col = Theme.Color(Json.S(cfg, "color")) ?? P.Accent;
-                    Ui.Add(card, Ui.SvgImg(0, gy, w, gh, Svg.Graph(gt, gv, (int)Math.Round(w), (int)Math.Round(gh), col, 3, 0.18, null, null, now - hours * 3600, now)));
+                    Ui.Add(card, Ui.SvgImg(0, gy, w, gh, Svg.Graph(gt, gv, (int)Math.Round(w), (int)Math.Round(gh), col, 3, 0.18, null, null, now - hours * 3600, now, true)));
                 }
             }
             return card;
@@ -500,16 +528,28 @@ namespace TizenNotifier
         private static readonly Regex Tags = new Regex("<[^>]+>"), Bold = new Regex(@"(\*\*|__)(.+?)\1"), Ital = new Regex(@"(?<![\w*])([*_])(?!\s)(.+?)(?<!\s)\1(?![\w*])"),
             Link = new Regex(@"\[([^\]]*)\]\([^)]*\)"), Code = new Regex("`([^`]*)`");
 
+        // inline Markdown -> TV text markup (bold, italic); everything else plain. Text is escaped first.
+        private static string Inline(string s)
+        {
+            s = s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+            s = Bold.Replace(s, "<font weight='bold'>$2</font>");
+            s = Ital.Replace(s, "<font slant='italic'>$2</font>");
+            return s;
+        }
+
+        private static readonly Regex MarkupTag = new Regex("<[^>]+>");
+        private static string Plain(string markup) => MarkupTag.Replace(markup, "").Replace("&lt;", "<").Replace("&gt;", ">").Replace("&amp;", "&");
+
         private static List<(string text, double px, string weight, bool secondary, double after)> Markdown(Ctx c, Dictionary<string, object> cfg)
         {
             string src = Json.S(cfg, "content") ?? "";
             string text = c.S.Template(src, new Dictionary<string, object> { ["config"] = cfg }) ?? "";
             var blocks = new List<(string, double, string, bool, double)>();
             var para = new List<string>();
-            void FlushPara() { if (para.Count > 0) { blocks.Add((string.Join(" ", para), 14, null, false, 8)); para.Clear(); } }
+            void FlushPara() { if (para.Count > 0) { blocks.Add((string.Join(" ", para), 14, null, false, 14)); para.Clear(); } }
             foreach (var raw in text.Replace("\r", "").Split('\n'))
             {
-                string line = Code.Replace(Link.Replace(Ital.Replace(Bold.Replace(Tags.Replace(raw, ""), "$2"), "$2"), "$1"), "$1").Replace("&nbsp;", " ").Replace("&amp;", "&").Replace("&lt;", "<").Replace("&gt;", ">");
+                string line = Inline(Code.Replace(Link.Replace(Tags.Replace(raw, ""), "$1"), "$1").Replace("&nbsp;", " ").Replace("&amp;", "&").Replace("&lt;", "<").Replace("&gt;", ">"));
                 string t = line.Trim();
                 if (t.Length == 0) { FlushPara(); continue; }
                 var hm = Regex.Match(t, @"^(#{1,6})\s+(.*)$");
@@ -521,7 +561,7 @@ namespace TizenNotifier
                     continue;
                 }
                 var lm = Regex.Match(t, @"^([-*+]|\d+\.)\s+(.*)$");
-                if (lm.Success) { FlushPara(); blocks.Add(((lm.Groups[1].Value.EndsWith(".") ? lm.Groups[1].Value + " " : "•  ") + lm.Groups[2].Value, 14, null, false, 2)); continue; }
+                if (lm.Success) { FlushPara(); blocks.Add(((lm.Groups[1].Value.EndsWith(".") ? lm.Groups[1].Value + " " : "      •  ") + lm.Groups[2].Value, 14, null, false, 1)); continue; }
                 if (t.StartsWith(">")) { FlushPara(); blocks.Add((t.TrimStart('>', ' '), 14, null, true, 6)); continue; }
                 if (Regex.IsMatch(t, @"^(-{3,}|\*{3,}|_{3,})$")) { FlushPara(); blocks.Add(("", 6, null, false, 6)); continue; }
                 para.Add(t);
@@ -534,12 +574,17 @@ namespace TizenNotifier
         {
             var P = c.P;
             var card = Json.Has(cfg, "text_only") && Json.B(cfg, "text_only", false) ? Ui.Box(0, 0, w, h) : Card(c, w, h);
-            double y = P.Pad;
-            Title(c, card, Json.S(cfg, "title"), w, ref y);
+            double y = 16;
+            if (Json.S(cfg, "title") is string mt) { Ui.Add(card, Ui.Text(16, 16, w - 32, 32, mt, 22, P.Text)); y += 48; }
             foreach (var b in Markdown(c, cfg))
             {
-                double bh = Ui.Lines(b.text, b.px, w - 2 * P.Pad) * b.px * 1.35;
-                if (b.text.Length > 0) Ui.Add(card, Ui.Text(P.Pad + 4, y, w - 2 * P.Pad - 8, bh, b.text, b.px, b.secondary ? P.Secondary : P.Text, b.weight, "left", "top", true));
+                double bh = Ui.Lines(Plain(b.text), b.px, w - 32) * b.px * 1.5;
+                if (b.text.Length > 0)
+                {
+                    var tn = Ui.Text(16, y, w - 32, bh, b.text, b.px, b.secondary ? P.Secondary : P.Text, b.weight, "left", "top", true);
+                    if (b.text.Contains("<")) tn["markup"] = true;
+                    Ui.Add(card, tn);
+                }
                 y += bh + b.after;
             }
             return card;
@@ -627,7 +672,7 @@ namespace TizenNotifier
                 else if (Json.S(x, "entity") is string id) cals.Add((id, Theme.Color(Json.S(x, "color"))));
             }
             string view = Json.S(cfg, "initial_view") ?? "listWeek";
-            int days = view.Contains("Day") ? 1 : view.Contains("Month") ? 14 : 7;
+            int days = Json.Get(cfg, "days") is double dd ? Math.Max(1, (int)dd) : view.Contains("Day") ? 1 : view.Contains("Month") ? 14 : 7;
             int max = (int)Json.N(cfg, "max_events", 12);
             var evs = c.S.Events(cals, days);
             var today = c.S.NowLocal.Date;
@@ -824,16 +869,29 @@ namespace TizenNotifier
             var P = c.P; var e = c.E(cfg) ?? c.S.State(Json.S(cfg, "camera_image"));
             var card = Ui.Box(0, 0, w, h, "#00000040", P.Radius);
             string src; int refresh = 0;
-            if (e != null && e.Domain == "camera") { src = c.S.Ha.Url + "/api/camera_proxy/" + e.Id; refresh = 2000; }
+            if (e != null && e.Domain == "camera")
+            {
+                src = c.S.Ha.Url + "/api/camera_proxy/" + e.Id; refresh = 2000;
+                var live = LiveCamera(c, e.Id, null, null, w, h, src);
+                if (live != null) { Ui.Add(card, live); src = null; }
+            }
             else src = HaUrl(c, Json.S(cfg, "image") ?? Picture(c, c.S.State(Json.S(cfg, "image_entity"))) ?? Picture(c, e));
             if (src != null) Ui.Add(card, Ui.Image(0, 0, w, h, src, P.Radius, refresh, Json.S(cfg, "fit_mode") == "contain" ? "contain" : "cover"));
             string title = Json.S(cfg, "title") ?? (T(cfg) == "picture-entity" && Json.B(cfg, "show_name", true) && e != null ? Format.Name(e, Json.S(cfg, "name")) : null);
             string state = T(cfg) == "picture-entity" && Json.B(cfg, "show_state", true) && e != null && e.Domain != "camera" ? c.S.StateText(e) : null;
-            if (title != null || state != null)
+            var glance = T(cfg) == "picture-glance" ? (Json.A(cfg, "entities") ?? new List<object>()).Select(x => x is string xs ? xs : Json.S(x, "entity")).Where(x => x != null).ToList() : new List<string>();
+            if (title != null || state != null || glance.Count > 0)
             {
-                var bar = Ui.Box(0, h - 40, w, 40, "#00000080");
-                if (title != null) Ui.Add(bar, Ui.Text(12, 0, w * 0.6, 40, title, 14, "#ffffff"));
-                if (state != null) Ui.Add(bar, Ui.Text(w * 0.6, 0, w * 0.4 - 12, 40, state, 14, "#ffffff", null, "right"));
+                var bar = Ui.Box(0, h - 48, w, 48, "#0000004d");
+                if (title != null) Ui.Add(bar, Ui.Text(16, 0, w * 0.6, 48, title, 16, "#ffffff"));
+                if (state != null) Ui.Add(bar, Ui.Text(w * 0.6, 0, w * 0.4 - 16, 48, state, 16, "#ffffff", null, "right"));
+                double ix = w - 16 - 24;
+                foreach (var id in Enumerable.Reverse(glance))
+                {
+                    var ge = c.S.State(id);
+                    Ui.Add(bar, Ui.Icon(ix, 12, 24, Format.Icon(ge, null, c.S.Icons), Format.Active(ge) ? "#ffffff" : "#ffffffa0"));
+                    ix -= 40;
+                }
                 Ui.Add(card, bar);
             }
             return card;
@@ -861,14 +919,26 @@ namespace TizenNotifier
                     string.Equals(sel, Format.Name(c.S.State(Json.S(cam, "camera_entity")), null), StringComparison.OrdinalIgnoreCase)) ?? pick;
             var card = Ui.Box(0, 0, w, h, "#00000040", c.P.Radius);
             string fit = Json.S(Json.O(Json.O(pick, "dimensions"), "layout"), "fit") == "contain" ? "contain" : "cover";
-            // live through the video relay when the camera names a go2rtc stream; snapshots otherwise
             string stream = Json.S(Json.O(pick, "go2rtc"), "stream"), host = HostOf(Json.S(Json.O(pick, "go2rtc"), "url") ?? Json.S(Json.O(pick, "frigate"), "url") ?? Json.S(Json.O(cfg, "frigate"), "url"));
-            string live = stream != null && host != null ? c.S.Host.VideoUrl("rtsp://" + host + ":8554/" + stream, (int)Math.Round(w * c.S.Opt.Scale)) : null;
             string snap = c.S.Ha.Url + "/api/camera_proxy/" + Json.S(pick, "camera_entity");
-            if (live != null) Ui.Add(card, new Dictionary<string, object> { ["type"] = "video", ["x"] = 0.0, ["y"] = 0.0, ["w"] = w, ["h"] = h, ["src"] = "rtsp://" + host + ":8554/" + stream,
-                ["volume"] = 0.0, ["fit"] = "contain", ["fallback"] = new Dictionary<string, object> { ["src"] = snap, ["refresh_ms"] = 1000.0 } });
-            else Ui.Add(card, Ui.Image(0, 0, w, h, c.S.Ha.Url + "/api/camera_proxy/" + Json.S(pick, "camera_entity"), c.P.Radius, 1000, fit));
+            var live = LiveCamera(c, Json.S(pick, "camera_entity"), stream, host, w, h, snap);
+            Ui.Add(card, live ?? Ui.Image(0, 0, w, h, snap, c.P.Radius, 1000, fit));
             return card;
+        }
+
+        // A camera's live view through the video relay: go2rtc's RTSP restream when the card names one (fast start),
+        // else Home Assistant's own stream for the entity. Null when the relay isn't available or the camera can't stream
+        // (the card then shows snapshots). The TV applies its video limits and falls back to `snap` on its own.
+        private static Dictionary<string, object> LiveCamera(Ctx c, string entity, string go2rtcStream, string go2rtcHost, double w, double h, string snap)
+        {
+            if (c.S.Host.VideoUrl("probe", 160) == null) return null;   // relay not available right now
+            string src = go2rtcStream != null && go2rtcHost != null ? "rtsp://" + go2rtcHost + ":8554/" + go2rtcStream : c.S.CameraStream(entity);
+            if (src == null) return null;
+            return new Dictionary<string, object>
+            {
+                ["type"] = "video", ["x"] = 0.0, ["y"] = 0.0, ["w"] = w, ["h"] = h, ["src"] = src, ["volume"] = 0.0, ["fit"] = "contain",
+                ["fallback"] = new Dictionary<string, object> { ["src"] = snap, ["refresh_ms"] = 1000.0 },
+            };
         }
 
         private static string HostOf(string u)
@@ -933,9 +1003,10 @@ namespace TizenNotifier
             else
             {
                 primary = Json.S(cfg, "primary_info") == "none" ? null : Format.Name(e, Json.S(cfg, "name"));
-                secondary = Json.S(cfg, "secondary_info") == "none" ? null : e == null ? null : c.S.StateText(e);
+                string si = Json.S(cfg, "secondary_info");
+                secondary = si == "none" || e == null ? null : si == "last-changed" ? Format.Relative(DateTimeOffset.FromUnixTimeMilliseconds((long)(e.LastChanged * 1000)).UtcDateTime, c.S.NowUtc) : c.S.StateText(e);
                 icon = Format.Icon(e, Json.S(cfg, "icon"), c.S.Icons);
-                color = Theme.Color(Json.S(cfg, "icon_color")) ?? (Format.Active(e) ? Format.StateColor(e) : null);
+                color = MushroomColor(c, cfg, e) ?? Theme.Color(Json.S(cfg, "icon_color")) ?? (Format.Active(e) ? Format.StateColor(e) : null);
             }
             primary = primary?.Trim(); secondary = secondary == null ? null : Regex.Replace(secondary.Trim(), @"\s+", " ");
             bool hasIcon = !string.IsNullOrEmpty(icon) && Json.S(cfg, "icon_type") != "none";
@@ -949,7 +1020,9 @@ namespace TizenNotifier
                 return card;
             }
             double ib = 36, iy = (Math.Min(h, 56) - ib) / 2, tx = hasIcon ? 10 + ib + 10 : 14;
-            if (hasIcon) Ui.Add(card, Ui.IconBadge(10, iy, ib, icon, ic, color != null));
+            string mpic = template ? null : MushroomPicture(c, cfg, e);
+            if (mpic != null) Ui.Add(card, Ui.Image(10, iy, ib, ib, mpic, ib / 2));
+            else if (hasIcon) Ui.Add(card, Ui.IconBadge(10, iy, ib, icon, ic, color != null));
             if (!string.IsNullOrEmpty(primary) && !string.IsNullOrEmpty(secondary))
             {
                 Ui.Add(card, Ui.Text(tx, iy - 1, w - tx - 10, 20, primary, 14, P.Text, "medium"));
@@ -1016,14 +1089,17 @@ namespace TizenNotifier
                 case "weather":
                     if (e == null) return null;
                     icon = Format.WeatherIcon(e.State);
-                    text = Json.Get(e.Attr, "temperature") is double tt ? Format.Number(tt, 0) + (e.A("temperature_unit") ?? "°") : null;
+                    var parts = new List<string>();
+                    if (Json.B(chip, "show_temperature", false) && Json.Get(e.Attr, "temperature") is double tt) parts.Add(Format.Number(tt, 0) + (e.A("temperature_unit") ?? "°"));
+                    if (Json.B(chip, "show_conditions", false)) parts.Add(c.S.StateText(e));
+                    text = parts.Count > 0 ? string.Join(" / ", parts) : null;
                     col = "#ffd54f";
                     break;
                 default:
                     return null;   // action / menu / back chips do nothing read-only
             }
             if (string.IsNullOrEmpty(icon) && string.IsNullOrEmpty(text)) return null;
-            double w = 12 + (icon != null ? 20 : 0) + (text != null ? 6 + Ui.Width(text, 13) : 0) + 12;
+            double w = 12 + (icon != null ? 20 : 0) + (text != null ? 6 + Ui.Width(text, 13) * 1.15 + 6 : 0) + 12;
             var b = Ui.Box(0, 0, w, 36, P.CardBg, 18);
             double x = 12;
             if (!string.IsNullOrEmpty(icon)) { Ui.Add(b, Ui.Icon(x, 8, 20, icon, col ?? P.Text)); x += 26; }
@@ -1047,8 +1123,9 @@ namespace TizenNotifier
                 if (m.Success) em = double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
                 double px = 14 * em;
                 string s = Cards.MomentFormat(c.S.NowLocal, Json.S(lines.FirstOrDefault(), "format"));
-                var box = Ui.Box(0, 0, Ui.Width(s, px) + 16, Math.Max(36, px * 1.4));
-                Ui.Add(box, Ui.Text(0, 0, (double)box["w"], (double)box["h"], s, px, P.Text, null, "center"));
+                double bh = Math.Max(36, px * 1.25);
+                var box = Ui.Box(0, 0, Ui.Width(s, px) + 28, bh, P.CardBg, bh / 2);
+                Ui.Add(box, Ui.Text(0, 0, (double)box["w"], bh, s, px, P.Text, null, "center"));
                 return box;
             }
             if (t == "custom:mushroom-template-badge")

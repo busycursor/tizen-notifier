@@ -121,7 +121,11 @@ def draw_node(canvas, n, ox, oy, pw, ph, fetch):
         px = n.get("pixel_size") or n.get("size", 20) * 1.33
         f = font(px, n.get("bold") or n.get("weight") in ("bold", "medium", "semiBold", "demiBold"))
         col = color(n.get("color"), (0, 0, 0, 255))
-        lines = wrap(d, n.get("text", ""), f, w) if n.get("multiline") else [str(n.get("text", ""))]
+        txt = str(n.get("text", ""))
+        if n.get("markup"):   # the TV renders markup; the preview just drops the tags
+            import re as _re
+            txt = _re.sub(r"<[^>]+>", "", txt).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+        lines = wrap(d, txt, f, w) if n.get("multiline") else [txt]
         lh = px * 1.25
         if "h" in n and not n.get("multiline"):
             lines = [ellipsize(d, lines[0], f, w)] if n.get("ellipsis", True) else lines

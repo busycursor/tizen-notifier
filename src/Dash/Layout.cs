@@ -11,7 +11,7 @@ namespace TizenNotifier
 {
     internal static class Layout
     {
-        public const double Row = 56, Gap = 8, SecGap = 32, ColMin = 320, ColMax = 500, Pad = 16;
+        public const double Row = 56, Gap = 8, SecGap = 32, ColMin = 320, ColMax = 500, Pad = 32;   // as the frontend's sections view
 
         public static Dictionary<string, object> Render(DashSession s, Dictionary<string, object> view)
         {
@@ -20,15 +20,25 @@ namespace TizenNotifier
             var ctx = new Ctx(s, W);
             var root = Ui.Box(0, 0, W, H);
             string type = Json.S(view, "type") ?? (Json.Has(view, "sections") ? "sections" : Json.B(view, "panel", false) ? "panel" : "masonry");
-            double top = Pad;
+            double top = 24;   // the badge row sits 24 px from the top; sections follow below it
             var badges = Json.A(view, "badges");
             if (badges != null && badges.Count > 0)
             {
                 double b = BadgeRow(ctx, root, badges, W, top);
-                if (b >= 0) top = b + (type == "sections" ? 16 : Gap);
+                if (b >= 0) top = b + (type == "sections" ? 24 : Gap);
             }
+            else top = type == "sections" ? 24 : Pad;
             switch (type)
             {
+                case "custom:grid-layout": case "custom:masonry-layout": case "custom:horizontal-layout": case "custom:vertical-layout":
+                {
+                    var holder = Ui.Box(Pad, top, W - 2 * Pad, 1);
+                    var lc = new Dictionary<string, object> { ["layout_type"] = type, ["cards"] = Json.Get(view, "cards"), ["layout"] = Json.Get(view, "layout") };
+                    var (lh, _) = Cards.RunLayout(ctx, lc, W - 2 * Pad, holder);
+                    holder["h"] = Math.Max(1, lh);
+                    Ui.Add(root, holder);
+                    break;
+                }
                 case "sections": Sections(ctx, root, view, W, top); break;
                 case "panel": Panel(ctx, root, view, W, H, top); break;
                 default: Masonry(ctx, root, view, W, top); break;
@@ -94,7 +104,7 @@ namespace TizenNotifier
             {
                 int sp = Math.Min(span(sec), cols);
                 double sw = sp * colW + (sp - 1) * SecGap;
-                var node = Section(c, sec, sw);
+                var node = Section(c, sec, sw, sp);
                 if (node == null) continue;
                 double sh = (double)node["h"];
                 int ri = -1, ci = -1;
@@ -120,31 +130,32 @@ namespace TizenNotifier
             }
         }
 
-        // One section: a 12-column grid. Returns a transparent box holding its cards, or null when it has none.
-        private static Dictionary<string, object> Section(Ctx c, Dictionary<string, object> sec, double sw)
+        // One section: a grid of 12 columns per view column it spans (a 3-wide section has 36). Rows are 56 px at least; a
+        // card sized by its content occupies one row that grows to fit it (the frontend's minmax(56px, auto) rows), and a
+        // card with a row count spans that many rows. Returns a transparent box holding the cards, or null when empty.
+        private static Dictionary<string, object> Section(Ctx c, Dictionary<string, object> sec, double sw, int span)
         {
             var cards = (Json.A(sec, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().ToList();
-            double cell = (sw - 11 * Gap) / 12;
+            int G = 12 * Math.Max(1, span);
+            double cell = (sw - (G - 1) * Gap) / G;
             var occ = new List<bool[]>();
-            var box = Ui.Box(0, 0, sw, 1);
-            double bottom = 0;
+            var placed = new List<(Dictionary<string, object> eff, int r, int k, int cols, int rows, double natural)>();
             foreach (var cfg in cards)
             {
                 if (!c.Visible(cfg)) continue;
                 var eff = Cards.Effective(c, cfg);
                 if (eff == null) continue;
                 var (gc, gr) = Cards.Grid(c, cfg, eff);
-                gc = Math.Max(1, Math.Min(12, gc));
+                gc = gc <= 0 ? G : Math.Max(1, Math.Min(G, gc));
                 double w = gc * cell + (gc - 1) * Gap;
-                int rowsN = gr > 0 ? gr : Math.Max(1, (int)Math.Ceiling((Cards.Height(c, eff, w) + Gap) / (Row + Gap)));
-                double h = rowsN * Row + (rowsN - 1) * Gap;
-                // first free spot, row-major (CSS grid dense)
+                int rowsN = gr > 0 ? gr : 1;
+                double natural = gr > 0 ? 0 : Cards.Height(c, eff, w);
                 int pr = 0, pc = 0;
                 for (int r = 0; ; r++)
                 {
-                    while (occ.Count < r + rowsN) occ.Add(new bool[12]);
+                    while (occ.Count < r + rowsN) occ.Add(new bool[G]);
                     int found = -1;
-                    for (int k = 0; k + gc <= 12 && found < 0; k++)
+                    for (int k = 0; k + gc <= G && found < 0; k++)
                     {
                         bool ok = true;
                         for (int rr = r; rr < r + rowsN && ok; rr++) for (int kk = k; kk < k + gc && ok; kk++) if (occ[rr][kk]) ok = false;
@@ -153,11 +164,25 @@ namespace TizenNotifier
                     if (found >= 0) { pr = r; pc = found; break; }
                 }
                 for (int rr = pr; rr < pr + rowsN; rr++) for (int kk = pc; kk < pc + gc; kk++) occ[rr][kk] = true;
-                var node = Cards.Draw(c, eff, w, h);
+                placed.Add((eff, pr, pc, gc, rowsN, natural));
+            }
+            if (placed.Count == 0) return null;
+            int nRows = placed.Max(p => p.r + p.rows);
+            var rowH = Enumerable.Repeat(Row, nRows).ToArray();
+            foreach (var p in placed) if (p.natural > 0) rowH[p.r] = Math.Max(rowH[p.r], p.natural);
+            var rowY = new double[nRows]; double y = 0;
+            for (int r = 0; r < nRows; r++) { rowY[r] = y; y += rowH[r] + Gap; }
+            var box = Ui.Box(0, 0, sw, 1);
+            double bottom = 0;
+            foreach (var p in placed)
+            {
+                double w = p.cols * cell + (p.cols - 1) * Gap;
+                double h = p.natural > 0 ? p.natural : Enumerable.Range(p.r, p.rows).Sum(r => rowH[r]) + (p.rows - 1) * Gap;
+                var node = Cards.Draw(c, p.eff, w, h);
                 if (node == null) continue;
-                node["x"] = pc * (cell + Gap); node["y"] = pr * (Row + Gap);
+                node["x"] = p.k * (cell + Gap); node["y"] = rowY[p.r];
                 Ui.Add(box, node);
-                bottom = Math.Max(bottom, pr * (Row + Gap) + h);
+                bottom = Math.Max(bottom, rowY[p.r] + h);
             }
             if (bottom <= 0) return null;
             box["h"] = bottom;
@@ -168,9 +193,11 @@ namespace TizenNotifier
         private static void Masonry(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double top)
         {
             var cards = (Json.A(view, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().ToList();
-            int n = Math.Max(1, Math.Min(4, (int)Math.Floor((W - 2 * Pad) / 350)));
-            double colW = (W - 2 * Pad - Gap * (n - 1)) / n;
+            int n = Math.Max(1, Math.Min((int)Json.N(view, "max_columns", 4), (int)Math.Floor(W / 500)));
+            double colW = Math.Min(492, (W - 2 * Pad - Gap * (n - 1)) / n);
+            double left = (W - (n * colW + (n - 1) * Gap)) / 2;
             var heights = new double[n];
+            var sizes = new double[n];
             foreach (var cfg in cards)
             {
                 if (!c.Visible(cfg)) continue;
@@ -179,8 +206,14 @@ namespace TizenNotifier
                 double h = Cards.Height(c, eff, colW);
                 var node = Cards.Draw(c, eff, colW, h);
                 if (node == null) continue;
-                int col = Array.IndexOf(heights, heights.Min());
-                node["x"] = Pad + col * (colW + Gap); node["y"] = top + heights[col];
+                // the frontend: the first column whose size is under 5 units, else the smallest (size ~ 50 px per unit;
+                // picture cards count 3 like the frontend's own estimate)
+                string ct = Cards.T(eff);
+                double units = ct.StartsWith("picture") || ct == "camera" ? 3 : Math.Ceiling(h / 50);
+                int col = 0;
+                for (int i = 0; i < n; i++) { if (sizes[i] < 5) { col = i; break; } if (sizes[i] < sizes[col]) col = i; }
+                sizes[col] += units;
+                node["x"] = left + col * (colW + Gap); node["y"] = top + heights[col];
                 heights[col] += h + Gap;
                 Ui.Add(root, node);
             }
