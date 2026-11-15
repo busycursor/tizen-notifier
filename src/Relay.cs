@@ -148,8 +148,10 @@ namespace TizenNotifier
         {
             string src = Json.S(n, "src");
             int w = (int)Json.N(n, "__relay_w", Json.N(n, "w", 640));
-            string url = Json.B(n, "__relay_deny", false) ? null : Url(src, w, Json.N(n, "start", 0), Json.B(n, "audio", true), (int)Json.N(n, "quality", 0));
+            bool denied = Json.B(n, "__relay_deny", false);
+            string url = denied ? null : Url(src, w, Json.N(n, "start", 0), Json.B(n, "audio", true), (int)Json.N(n, "quality", 0));
             n.Remove("__relay_w"); n.Remove("__relay_deny");
+            string why = denied ? "over this TV's stream limit" : "relay " + (Configured ? "not available" : "not configured");
             var fb = Json.Get(n, "fallback");
             foreach (var k in new[] { "src", "start", "audio", "quality", "fallback", "loop", "underlay" }) n.Remove(k);
             if (url != null)
@@ -159,17 +161,18 @@ namespace TizenNotifier
                 n.Remove("mute");
                 return;
             }
-            n.Remove("mute");
+            foreach (var k in new[] { "mute", "volume", "stats", "close_on_end", "sync_trim_ms" }) n.Remove(k);
             string snap = fb as string ?? Json.S(fb, "src");
             if (snap != null)
             {
                 n["type"] = "image"; n["src"] = snap; n["fit"] = Json.S(n, "fit") ?? "contain";
                 n["refresh_ms"] = Json.N(fb, "refresh_ms", 1000);
-                warn.Add("video: relay " + (Configured ? "not available" : "not configured") + "; showing snapshots");
+                warn.Add("video: " + why + "; showing snapshots");
                 return;
             }
+            n.Remove("fit");
             n["type"] = "box"; n["visible"] = false;
-            warn.Add("video: relay " + (Configured ? "not available" : "not configured") + " and no fallback; left out");
+            if (!denied) warn.Add("video: " + why + " and no fallback; left out");   // a denied one is already in Plan's warning
         }
     }
 }
