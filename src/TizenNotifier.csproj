@@ -1,0 +1,18 @@
+<Project Sdk="Tizen.NET.Sdk/1.1.9">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>tizen80</TargetFramework>
+    <AssemblyName>TizenNotifier</AssemblyName>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <!-- Samsung Partner cert; password read from a file at build time, never on a command line -->
+    <AuthorPath>/work/cert/author.p12</AuthorPath>
+    <AuthorPass>$([System.IO.File]::ReadAllText('/work/cert/password').Trim())</AuthorPass>
+    <DistributorPath>/work/cert/distributor.p12</DistributorPath>
+    <DistributorPass>$([System.IO.File]::ReadAllText('/work/cert/password').Trim())</DistributorPass>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Tizen.NET" Version="8.0.0.*" />
+    <PackageReference Include="NLayer" Version="3.0.1" />
+  </ItemGroup>
+</Project>

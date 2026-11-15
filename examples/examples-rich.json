@@ -1,0 +1,9 @@
+{"id": "test-rich", "duration": 12, "w": 900, "h": 230, "anchor": "top-right", "margin": 60,
+ "enter": {"type": "slide", "from": "right", "ms": 450},
+ "root": {"type": "box", "bg": "#0d0d12f0", "radius": 28, "shadow": {"blur": 30, "y": 8, "color": "#000000c0"},
+   "children": [
+     {"type": "image", "src": "http://camera.local/snapshot.jpg", "x": 20, "y": 20, "w": 320, "h": 180, "radius": 16, "fit": "cover"},
+     {"type": "text", "x": 370, "y": 26, "w": 500, "text": "Home Assistant", "size": 30, "bold": true, "color": "#73bfff"},
+     {"type": "text", "x": 370, "y": 86, "w": 500, "text": "Camera snapshot", "size": 36, "color": "#ffffff", "multiline": true},
+     {"type": "progress", "x": 370, "y": 196, "w": 500, "h": 8, "radius": 4, "bg": "#ffffff22", "color": "#73bfff"}
+   ]}}

@@ -1,0 +1,10 @@
+build.env
+secrets/
+out/
+.stage.*
+bin/
+obj/
+src/res/config.json
+*.p12
+device-profile.xml
+.DS_Store

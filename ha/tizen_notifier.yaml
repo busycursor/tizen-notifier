@@ -1,0 +1,282 @@
+# Tizen Notifier: overlay messages on Samsung Tizen TVs (TV app TizNotify1.notifier).
+# Home Assistant package: put it in /config/packages/ (homeassistant: packages: !include_dir_named packages).
+#
+#   script.tizen_notify          simple fields (title/message/image/sound/buttons) -> a ready-made card,
+#                                or `payload` = a full notifier request (any layout; see the header of src/Notes.cs)
+#   script.tizen_notify_dismiss  close one message by id, or all
+# Both start the notifier if it isn't running (power-off kills it) but never turn a TV on.
+# Tizen 5 TVs: no rounded corners, shadows or Lottie; the same requests work (warnings only).
+#
+# Setup: replace the example TV (living_room, 192.168.1.50) and the Home Assistant URL (`ha`) below with your own,
+# and add the token to secrets.yaml:   tizen_notifier_living_room_auth: "Bearer <token>"
+# Another TV: add it to `tvs` in both scripts and to the tv selectors, add a rest_command.tizen_notifier_<tv> with its
+# own !secret, and add the secret.
+
+rest_command:
+  tizen_notifier_living_room:
+    url: "http://192.168.1.50:9123/{{ endpoint }}"
+    method: post
+    headers:
+      Authorization: !secret tizen_notifier_living_room_auth
+    content_type: application/json
+    payload: "{{ body | tojson }}"
+    timeout: 30
+  tizen_notifier_health:
+    url: "http://{{ host }}:9123/health"
+    method: get
+    timeout: 3
+  # The TV's own API on :8001: power state, and launching an installed app.
+  tizen_notifier_tv_api_get:
+    url: "http://{{ host }}:8001/api/v2/{{ path }}"
+    method: get
+    timeout: 3
+  tizen_notifier_tv_api_post:
+    url: "http://{{ host }}:8001/api/v2/{{ path }}"
+    method: post
+    timeout: 5
+
+script:
+  tizen_notify:
+    alias: "Tizen Notifier - show a message on a TV"
+    mode: parallel
+    max: 10
+    fields:
+      tv:
+        description: TV key (as in `tvs` below)
+        required: true
+        default: living_room
+        selector:
+          select:
+            options:
+            - living_room
+      title:
+        description: Heading
+        default: Home Assistant
+        selector:
+          text:
+      message:
+        description: Body text (markup allowed when markup is on)
+        selector:
+          text:
+            multiline: true
+      image:
+        description: camera.* entity, /local/... path, or an allow-listed URL
+        selector:
+          text:
+      refresh_ms:
+        description: Re-fetch the image every N ms for a live-ish camera view (min 200; 0 = still picture)
+        default: 0
+        selector:
+          number:
+            min: 0
+            max: 10000
+            step: 100
+      duration:
+        description: Seconds on screen (0 = until dismissed)
+        default: 10
+        selector:
+          number:
+            min: 0
+            max: 3600
+      anchor:
+        description: top-right, top, bottom-left, center, ...
+        default: top-right
+        selector:
+          text:
+      sound:
+        description: 'WAV/MP3: /local/... path or allow-listed URL'
+        selector:
+          text:
+      volume:
+        description: "Loudness 0-1 as heard (sent to the TV cubed: 0.35 = moderate, 0.6+ = very loud)"
+        default: 0.35
+        selector:
+          number:
+            min: 0
+            max: 1
+            step: 0.05
+      buttons:
+        description: List of labels, or of {id, label}. Takes the remote while shown; Back closes.
+        selector:
+          object:
+      webhook_id:
+        description: HA webhook that receives {id, action, data} for button presses / back / timeout
+        selector:
+          text:
+      id:
+        description: Message id; the same id again replaces it in place
+        selector:
+          text:
+      markup:
+        description: Allow <color value='#rrggbb'>..</color> etc. in the message
+        default: false
+        selector:
+          boolean:
+      payload:
+        description: Full notifier request; overrides every field above except tv
+        selector:
+          object:
+    sequence:
+      - variables:
+          tvs:
+            living_room: {host: 192.168.1.50, name: Living Room TV}
+          ha: "http://homeassistant.local:8123"   # how the TV reaches Home Assistant; must be on the TV's allow list
+          cfg: "{{ tvs.get(tv | default('living_room')) }}"
+      - if: "{{ cfg is none }}"
+        then:
+          - variables: {result: {ok: false, error: "unknown tv {{ tv }}"}}
+          - stop: unknown tv
+            response_variable: result
+      - action: script.tizen_notifier_ensure
+        data: {host: "{{ cfg.host }}"}
+        response_variable: up
+      - if: "{{ not up.ok }}"
+        then:
+          - variables: {result: "{{ up }}"}
+          - stop: notifier not reachable
+            response_variable: result
+      - variables:
+          body: >-
+            {%- if payload is defined and payload -%}
+              {{ payload }}
+            {%- else -%}
+              {%- set src = image | default('') | string -%}
+              {%- if src.startswith('camera.') -%}
+                {%- set src = ha ~ '/api/camera_proxy/' ~ src ~ '?token=' ~ (state_attr(src, 'access_token') or '') -%}
+              {%- elif src.startswith('/') -%}{%- set src = ha ~ src -%}{%- endif -%}
+              {%- set has_img = src | length > 0 -%}
+              {%- set dur = duration | default(10) | float(10) -%}
+              {%- set W = 900 -%}{%- set Hc = 230 if has_img else 200 -%}
+              {%- set tx = 370 if has_img else 40 -%}{%- set tw = W - tx - 40 -%}
+              {%- set bl = buttons | default([], true) -%}{%- set bl = [bl] if bl is string else bl -%}
+              {%- set H = Hc + (100 if bl | count > 0 else 0) -%}
+              {%- set kids = [] -%}
+              {%- if has_img -%}
+                {%- set img = {'type': 'image', 'src': src, 'x': 20, 'y': 20, 'w': 320, 'h': Hc - 40, 'radius': 16, 'fit': 'cover'} -%}
+                {%- if (refresh_ms | default(0) | int(0)) > 0 -%}{%- set img = dict(img, refresh_ms=refresh_ms | int) -%}{%- endif -%}
+                {%- set kids = kids + [img] -%}
+              {%- endif -%}
+              {%- set kids = kids + [
+                    {'type': 'text', 'x': tx, 'y': 26, 'w': tw, 'text': title | default('Home Assistant'), 'size': 30, 'bold': true, 'color': '#73bfff', 'ellipsis': true},
+                    {'type': 'text', 'name': 'message', 'x': tx, 'y': 86, 'w': tw, 'h': Hc - 86 - 36, 'text': message | default(''), 'size': 36,
+                     'color': '#ffffff', 'multiline': true, 'ellipsis': true, 'markup': markup | default(false)}] -%}
+              {%- if dur > 0 and bl | count == 0 -%}
+                {%- set kids = kids + [{'type': 'progress', 'x': tx, 'y': Hc - 26, 'w': tw, 'h': 8, 'radius': 4, 'bg': '#ffffff22', 'color': '#73bfff'}] -%}
+              {%- endif -%}
+              {%- set n = bl | count -%}
+              {%- if n > 0 -%}
+                {%- set bw = ((W - 80 - 20 * (n - 1)) / n) | int -%}
+                {%- for b in bl -%}
+                  {%- set lab = b.label if b is mapping else b | string -%}
+                  {%- set bid = b.id if b is mapping and b.id is defined else lab | lower | replace(' ', '_') -%}
+                  {%- set kids = kids + [{'type': 'box', 'action': bid, 'x': 40 + loop.index0 * (bw + 20), 'y': Hc, 'w': bw, 'h': 70, 'radius': 35,
+                       'bg': '#2a2a33', 'focus': {'bg': '#2f7fd6', 'scale': 1.06},
+                       'children': [{'type': 'text', 'x': 0, 'y': 0, 'w': bw, 'h': 70, 'text': lab, 'size': 28, 'color': '#ffffff', 'align': 'center', 'valign': 'center'}]}] -%}
+                {%- endfor -%}
+              {%- endif -%}
+              {%- set req = {'duration': dur, 'w': W, 'h': H, 'anchor': anchor | default('top-right'),
+                             'root': {'type': 'box', 'bg': '#0d0d12f0', 'radius': 28, 'shadow': {'blur': 30, 'y': 8, 'color': '#000000c0'}, 'children': kids}} -%}
+              {%- if id is defined and id -%}{%- set req = dict(req, id=id) -%}{%- endif -%}
+              {%- if webhook_id is defined and webhook_id -%}{%- set req = dict(req, callback=ha ~ '/api/webhook/' ~ webhook_id) -%}{%- endif -%}
+              {%- if sound is defined and sound -%}
+                {%- set s = ha ~ sound if sound.startswith('/') else sound -%}
+                {%- set vol = volume | default(0.35) | float(0.35) -%}
+                {%- set req = dict(req, sound={'src': s, 'volume': [[vol, 0] | max, 1] | min ** 3}) -%}
+              {%- endif -%}
+              {{ req }}
+            {%- endif -%}
+      - action: "rest_command.tizen_notifier_{{ tv }}"
+        data: {endpoint: notify, body: "{{ body }}"}
+        response_variable: r
+        continue_on_error: true
+      - variables:
+          result: >-
+            {% if r is defined and r.status == 200 %}{{ r.content }}{% else %}{{ {'ok': false, 'error': 'notify failed', 'status': r.status if r is defined else none, 'content': r.content if r is defined else none} }}{% endif %}
+      - stop: done
+        response_variable: result
+
+  tizen_notify_dismiss:
+    alias: "Tizen Notifier - close a message"
+    mode: parallel
+    fields:
+      tv:
+        description: TV key (as in `tvs` below)
+        required: true
+        default: living_room
+        selector:
+          select:
+            options:
+            - living_room
+      id:
+        description: Message id (leave empty to close all)
+        selector:
+          text:
+    sequence:
+      - variables:
+          tvs:
+            living_room: {host: 192.168.1.50}
+          cfg: "{{ tvs.get(tv | default('living_room')) }}"
+      - action: rest_command.tizen_notifier_health
+        data: {host: "{{ cfg.host }}"}
+        response_variable: h
+        continue_on_error: true
+      - if: "{{ not (h is defined and h.status == 200) }}"
+        then:
+          - variables: {result: {ok: true, closed: 0, note: "notifier not running"}}
+          - stop: nothing to close
+            response_variable: result
+      - action: "rest_command.tizen_notifier_{{ tv }}"
+        data:
+          endpoint: dismiss
+          body: "{{ {'id': id} if id is defined and id else {'all': true} }}"
+        response_variable: r
+        continue_on_error: true
+      - variables:
+          result: "{{ r.content if r is defined and r.status == 200 else {'ok': false, 'status': r.status if r is defined else none} }}"
+      - stop: done
+        response_variable: result
+
+  # Start the notifier if it doesn't answer; never wakes a TV that is off.
+  tizen_notifier_ensure:
+    alias: "Tizen Notifier - make sure it is running"
+    mode: parallel
+    fields:
+      host:
+        description: TV IP
+        required: true
+        selector:
+          text:
+    sequence:
+      - action: rest_command.tizen_notifier_health
+        data: {host: "{{ host }}"}
+        response_variable: h
+        continue_on_error: true
+      - if: "{{ h is defined and h.status == 200 }}"
+        then:
+          - variables: {result: {ok: true, started: false}}
+          - stop: running
+            response_variable: result
+      - action: rest_command.tizen_notifier_tv_api_get
+        data: {host: "{{ host }}", path: ""}
+        response_variable: tvinfo
+        continue_on_error: true
+      - if: "{{ not (tvinfo is defined and tvinfo.status == 200 and tvinfo.content.device.PowerState == 'on') }}"
+        then:
+          - variables: {result: {ok: false, error: "TV is off or unreachable"}}
+          - stop: tv off
+            response_variable: result
+      - action: rest_command.tizen_notifier_tv_api_post
+        data: {host: "{{ host }}", path: "applications/TizNotify1.notifier"}
+        continue_on_error: true
+      - repeat:
+          sequence:
+            - delay: 1
+            - action: rest_command.tizen_notifier_health
+              data: {host: "{{ host }}"}
+              response_variable: h
+              continue_on_error: true
+          until: "{{ (h is defined and h.status == 200) or repeat.index >= 12 }}"
+      - variables:
+          result: "{{ {'ok': true, 'started': true} if (h is defined and h.status == 200) else {'ok': false, 'error': 'notifier did not start'} }}"
+      - stop: done
+        response_variable: result
