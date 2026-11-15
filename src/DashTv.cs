@@ -23,6 +23,8 @@ namespace TizenNotifier
             TizenNotifier.Log.W("dash " + s.Opt.Id + ": show (" + s.CardsDrawn + " cards)" + (code != 200 ? " failed: " + Json.S(res, "error") : "") + (warn != null && warn.Count > 0 ? " warnings: " + Json.Write(warn.Take(5).ToList()) : ""));
         }
 
+        public string VideoUrl(string src, int widthPx) => Relay.Url(src, widthPx, 0, true);
+
         public void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes)
         {
             var nodes = new Dictionary<string, object>();

@@ -861,8 +861,21 @@ namespace TizenNotifier
                     string.Equals(sel, Format.Name(c.S.State(Json.S(cam, "camera_entity")), null), StringComparison.OrdinalIgnoreCase)) ?? pick;
             var card = Ui.Box(0, 0, w, h, "#00000040", c.P.Radius);
             string fit = Json.S(Json.O(Json.O(pick, "dimensions"), "layout"), "fit") == "contain" ? "contain" : "cover";
-            Ui.Add(card, Ui.Image(0, 0, w, h, c.S.Ha.Url + "/api/camera_proxy/" + Json.S(pick, "camera_entity"), c.P.Radius, 1000, fit));
+            // live through the video relay when the camera names a go2rtc stream; snapshots otherwise
+            string stream = Json.S(Json.O(pick, "go2rtc"), "stream"), host = HostOf(Json.S(Json.O(pick, "go2rtc"), "url") ?? Json.S(Json.O(pick, "frigate"), "url") ?? Json.S(Json.O(cfg, "frigate"), "url"));
+            string live = stream != null && host != null ? c.S.Host.VideoUrl("rtsp://" + host + ":8554/" + stream, (int)Math.Round(w * c.S.Opt.Scale)) : null;
+            string snap = c.S.Ha.Url + "/api/camera_proxy/" + Json.S(pick, "camera_entity");
+            if (live != null) Ui.Add(card, new Dictionary<string, object> { ["type"] = "video", ["x"] = 0.0, ["y"] = 0.0, ["w"] = w, ["h"] = h, ["src"] = "rtsp://" + host + ":8554/" + stream,
+                ["volume"] = 0.0, ["fit"] = "contain", ["fallback"] = new Dictionary<string, object> { ["src"] = snap, ["refresh_ms"] = 1000.0 } });
+            else Ui.Add(card, Ui.Image(0, 0, w, h, c.S.Ha.Url + "/api/camera_proxy/" + Json.S(pick, "camera_entity"), c.P.Radius, 1000, fit));
             return card;
+        }
+
+        private static string HostOf(string u)
+        {
+            if (string.IsNullOrEmpty(u)) return null;
+            if (!u.Contains("://")) u = "http://" + u;
+            try { return new Uri(u).Host; } catch (Exception) { return null; }
         }
 
         // ---- stacks / grid ----

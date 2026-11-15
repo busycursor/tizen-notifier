@@ -17,6 +17,8 @@ usage() { sed -n 3,4p "$0" | sed 's/^# *//'; exit 2; }
 : "${TIZEN5_TVS:=}"                                      # space-separated TV names that run Tizen 5
 : "${HA_URL:=}"                                          # Home Assistant base URL for dashboards (optional)
 : "${HA_TOKEN_FILE:=}"                                   # per-TV token of a non-admin HA user; {tv} = TV name
+: "${RELAY_URL:=}"                                       # video relay base URL (relay/; optional)
+: "${RELAY_TOKEN_FILE:=}"                                # the relay's token, if it has one
 : "${BUILD_DOCKER:=docker}"
 : "${SDK_IMAGE:=mcr.microsoft.com/dotnet/sdk:6.0}"
 : "${TIZEN_TOOLS_IMAGE:=}"                               # empty = use sdb and tizen from this machine
@@ -49,13 +51,15 @@ case "$cmd" in
     cp "$CERT_DIR/author.p12" "$CERT_DIR/distributor.p12" "$CERT_DIR/password" "$ST/cert/"
     hatok=${HA_TOKEN_FILE//\{tv\}/$tv}
     if [ -n "$HA_URL" ] && [ ! -s "$hatok" ]; then echo "HA_URL is set but there is no HA token at $hatok" >&2; exit 2; fi
-    python3 -I - "$tok" "$ALLOW" "$ST/config.json" "$HA_URL" "$hatok" <<'PY'
+    python3 -I - "$tok" "$ALLOW" "$ST/config.json" "$HA_URL" "$hatok" "$RELAY_URL" "$RELAY_TOKEN_FILE" <<'PY'
 import json, sys
-tok, allow, out, ha_url, ha_tok = sys.argv[1:]
+tok, allow, out, ha_url, ha_tok, relay_url, relay_tok = sys.argv[1:]
 cfg = {"token": open(tok).read().strip(), "port": 9123,
        "allow": [h.strip() for h in allow.split(",") if h.strip()]}
 if ha_url:
     cfg["ha"] = {"url": ha_url.rstrip("/"), "token": open(ha_tok).read().strip()}
+if relay_url:
+    cfg["relay"] = {"url": relay_url.rstrip("/"), "token": open(relay_tok).read().strip() if relay_tok else ""}
 json.dump(cfg, open(out, "w"))
 PY
     COPYFILE_DISABLE=1 tar -czf "$ST/b.tgz" --exclude bin --exclude obj -C "$HERE" src -C "$ST" config.json cert

@@ -15,10 +15,11 @@ namespace TizenNotifier
         private const long MaxFile = 16 * 1024 * 1024;
         private static readonly List<object> Playing = new List<object>();   // keep players rooted while they play
 
-        public static void Prepare(Dictionary<string, object> node, List<string> files, List<object> warn)
+        public static void Prepare(Dictionary<string, object> node, List<string> files, List<object> warn, bool takeover = false)
         {
             if (node == null) return;
             string type = (Json.S(node, "type") ?? "box").ToLowerInvariant();
+            if (type == "video" && !takeover) { Relay.VideoNode(node, warn); type = (Json.S(node, "type") ?? "box").ToLowerInvariant(); }
             if (type == "icon" || type == "graph" || type == "svg") { SvgNode(node, warn); type = "image"; }
             if (node.ContainsKey("src") && (type == "image" || type == "gif" || type == "lottie" || type == "video" || type == "mjpeg"))
             {
@@ -32,7 +33,7 @@ namespace TizenNotifier
                 }
             }
             var kids = Json.A(node, "children");
-            if (kids != null) foreach (var c in kids) Prepare(c as Dictionary<string, object>, files, warn);
+            if (kids != null) foreach (var c in kids) Prepare(c as Dictionary<string, object>, files, warn, takeover);
         }
 
         // icon / graph / svg node -> image node with an SVG data: URI (also used by /update when it names one of those types)

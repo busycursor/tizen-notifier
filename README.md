@@ -7,6 +7,10 @@ Frame TV's Art Mode. Video keeps playing, and the remote keeps controlling the a
 Messages can carry text, pictures, a live-ish camera view, GIFs, Lottie animations, gradients, progress bars, buttons and
 sound. Every look is defined in the request, so new layouts never need a new install.
 
+It can also show a **Home Assistant dashboard** as a live, read-only overlay (for example over Art Mode), and play
+**video with sound in a window or full screen without the TV's video decoder**, so the picture underneath keeps playing.
+Video goes through a small relay (`relay/`) that transcodes on another machine's GPU.
+
 Tested on two Frame TVs (Tizen 6.0, tizen80) and a Tizen 5.0 (TIZEN5, tizen50) TV which has slightly less feature support.
 
 Other models and firmware are untested.
@@ -28,7 +32,9 @@ Samsung **Partner**-level certificate. This requires logging into your Samsung a
 - An HTTP server on the TV (port **9123**) takes JSON requests. Every request except `GET /health` needs
   `Authorization: Bearer <token>`. The token is per TV and baked into that TV's build.
 - Pictures, sounds and animations are sent inline (`data:` URIs) or fetched by the app from **allow-listed hosts only**.
-  The TV never holds credentials for your cameras or Home Assistant.
+  The TV never holds credentials for your cameras. For dashboards it holds a read-only token of a **non-admin** Home
+  Assistant user, and only when built with one (`HA_URL`, `HA_TOKEN_FILE`); its websocket client refuses every command
+  that could change anything.
 
 ---
 
@@ -101,7 +107,8 @@ Details:
 | POST | `/config` | `{allow: [hosts]}`: persist the allow list |
 | POST | `/host` | Tizen 5 build only: report or drive the shared host window (diagnostics) |
 
-**The full request reference, with every property, tested recipes and the button rules, is [usage.md](usage.md).** In short:
+**The full request reference, with every property, tested recipes, the button rules, video (`/play`) and dashboards, is
+[usage.md](usage.md).** In short:
 
 ```json
 { "id": "front-door", "duration": 10, "w": 900, "h": 230, "anchor": "top-right", "margin": 60,
@@ -196,6 +203,9 @@ Adding a TV: add its entry to the `tvs` maps and the `tv` selectors in the scrip
 | `ha/tizen_notifier.yaml` | Home Assistant package |
 | `build.sh`, `build.env.example` | build and install |
 | `cert-tools/make_distributor.js` | distributor certificate for N DUIDs, keeping the author certificate |
+| `relay/` | video relay: Dockerfile, compose file and server (ffmpeg, VA-API) |
+| `dash-host/`, `tools/preview.py` | render a dashboard on a desktop and draw it as a PNG (layout checks without a TV) |
+| `docs/` | design notes |
 | `examples/` | the requests used in testing |
 | `testassets/` | test GIF, Lottie and sounds (generated for this project) |
 

@@ -15,6 +15,7 @@ namespace TizenNotifier
         void Log(string msg);
         void Show(DashSession s, Dictionary<string, object> tree);                    // first render, or structure changed
         void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes);   // same structure: changed props by node name
+        string VideoUrl(string src, int widthPx);   // live video through the relay, or null (then cards use snapshots)
     }
 
     internal sealed class DashOptions
@@ -530,9 +531,9 @@ namespace TizenNotifier
             flat[name] = props;
             // type and anything that can't be changed in place are part of the shape. Geometry of boxes, text and plain
             // images can be changed in place; a rounded or refreshing image is a wrapper, so its geometry is shape.
-            bool wrapped = Json.S(n, "type") == "image" && (Json.Has(n, "radius") || Json.Has(n, "refresh_ms"));
+            bool wrapped = (Json.S(n, "type") == "image" && (Json.Has(n, "radius") || Json.Has(n, "refresh_ms"))) || Json.S(n, "type") == "mjpeg" || Json.S(n, "type") == "video";
             shape.Append(name).Append(':').Append(Json.S(n, "type")).Append(wrapped ? Json.Write(new[] { Json.Get(n, "x"), Json.Get(n, "y"), Json.Get(n, "w"), Json.Get(n, "h") }) : "")
-                 .Append(Json.Has(n, "refresh_ms") ? "r" + Json.S(n, "src") : "").Append(Json.Has(n, "animate") ? "a" : "").Append(Json.Has(n, "radius") ? "c" : "")
+                 .Append(Json.Has(n, "refresh_ms") || Json.S(n, "type") == "mjpeg" || Json.S(n, "type") == "video" ? "r" + Json.S(n, "src") : "").Append(Json.Has(n, "animate") ? "a" : "").Append(Json.Has(n, "radius") ? "c" : "")
                  .Append(Json.Has(n, "gradient") ? "g" : "").Append(Json.Has(n, "markup") ? "m" : "")
                  .Append('[').Append(string.Join(",", props.Keys.OrderBy(k => k, StringComparer.Ordinal))).Append("];");
             var kids = Json.A(n, "children");

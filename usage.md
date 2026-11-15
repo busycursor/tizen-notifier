@@ -68,6 +68,11 @@ curl -sS -X POST http://<tv-ip>:9123/notify \
 | POST | `/dismiss` | `{"id": "..."}` or `{"all": true}` | `{ok, closed: <count>}` |
 | POST | `/config` | `{"allow": ["host", "host:port", ...]}` | replaces and saves the allow list |
 | POST | `/host` | `{"actions": [...]}` | T5 only: diagnostics for the shared host window |
+| POST | `/play` | `{src, ...}` (section 12) | play a video through the relay: full screen or a window |
+| POST | `/dashboard` | `{dashboard, ...}` (section 13) | show a Home Assistant dashboard, live |
+| GET | `/dashboard` | none | dashboard sessions and their status |
+| POST | `/dashboard/stop` | `{"id": "..."}` or `{"all": true}` | stop a dashboard |
+| GET | `/probe` | none | what the TV's media stack offers (nothing is shown) |
 
 Run `POST /selftest` once after the app starts, then read `capabilities` to see which node types a TV supports.
 
@@ -298,26 +303,37 @@ For a rounded `gif` (or anything else), build the clip box yourself:
 - **Needs app 1.0.8 or later** (`GET /health` shows `version`). On older builds, closing a message that contains a
   Lottie kills the notifier. On 1.0.8, closing by timeout, `/dismiss` and replacement were all tested.
 
-### 6.6 `video` (avoid)
+### 6.6 `video` (tested on T6)
 
 ```json
-{"takeover": true, "root": {"type": "video", "src": "http://homeassistant.local:8123/local/clip.mp4",
- "w": 640, "h": 360, "loop": true, "mute": true}}
+{"type": "video", "src": "shows/Some Show/Season 1/episode.mkv", "start": 480, "x": 0, "y": 0, "w": 640, "h": 360,
+ "volume": 1.0, "fallback": {"src": "http://camera.local/snapshot.jpg", "refresh_ms": 1000}}
 ```
 
-- Without top-level `"takeover": true` the node becomes an empty box with a warning.
+With a **video relay** configured (section 12), a `video` node plays through it without the TV's hardware decoder: the
+picture underneath (Art Mode, another app's video) stays. The relay transcodes the source on its own machine (GPU when
+it has one) into a synced MJPEG + audio stream, and the node becomes an `mjpeg` node (6.7).
+
+- `src`: a file under the relay's media folder (path relative to it), or an `http(s)` / `rtsp` URL whose host is on
+  the **relay's** allow list. Cameras: go2rtc's RTSP restream, e.g. `rtsp://camera.local:8554/camera1`.
+- `start` (seconds into a file), `volume` (0..1, default 1.0), `mute` (true = volume 0), `audio` (false = no sound and no
+  audio clock), `quality` (JPEG quality 10..100, default 80).
+- The picture is letterboxed to the source's shape inside `w`×`h`.
+- **Relay not configured or not answering:** the node shows `fallback` (an image refreshed every `refresh_ms`, e.g. a
+  camera snapshot) when given. Otherwise it is left out, with a warning.
+- Live sources reconnect by themselves. A file plays to its end.
+
+**Hardware playback** (`"takeover": true` at the top level of the message) uses the TV's own player instead:
 - Measured: it **blanks the picture of the app underneath and that app does not recover.** An RTSP source crashed the
   notifier.
-- URLs stream directly (`http`, `https`, `rtsp` on the allow list). `data:` is saved to a file first.
+- URLs stream directly (`http`, `https`, `rtsp` on the TV's allow list). `data:` is saved to a file first.
 - `loop` (bool, default `true`) and `mute` (bool, default `true`).
 - `underlay` (bool, default `true`). `false` draws the video as a texture inside the message window instead of
   the TV's video layer. It plays at full speed (tested 2026-11-15 on a Frame, Tizen 6.0, H.264 MP4 over HTTP).
   **It still blanks Art Mode.** The art does not come back until Art Mode is switched on again. The hardware decoder
   is what the other app loses, not only the video layer.
 - **No hardware route leaves the picture underneath intact.** Tizen's MediaCodec answers "Not Supported Feature" on
-  these TVs, and the player only draws to a window's video layer or as a texture. Moving video over other content needs
-  a route with no video decoder: snapshots (6.3) or MJPEG frames.
-- For a camera, use 6.3.
+  these TVs, and the player only draws to a window's video layer or as a texture. That is why the relay exists.
 
 ### 6.7 `mjpeg`: video without the video decoder (tested on T6)
 
@@ -584,7 +600,68 @@ For features not listed here. These are applied by name, case-insensitive.
 
 ---
 
-## 12. Tizen 5 differences
+
+---
+
+## 12. Video relay and `/play`
+
+The relay (`relay/` in the repository) runs in Docker on a machine with the media and, ideally, a GPU. It turns a source
+into the synced stream the TV plays without its hardware decoder. The TV gets its address and token at build time
+(`RELAY_URL`, `RELAY_TOKEN_FILE`); its host is then allowed automatically.
+
+```
+POST /play
+{"src": "shows/Some Show/Season 1/episode.mkv", "start": 480, "volume": 1.0}
+```
+
+- Full screen by default. A window: `w` (and `h`, default 16:9), with `x`/`y` or `anchor`/`margin`.
+- `opacity` (0..1); the video box is named `vid`, so `/update {"id": "play", "nodes": {"vid": {"opacity": 0.5}}}`
+  changes it while it plays.
+- `id` (default `play`), `volume`, `start`, `quality`, `bg` (behind the letterbox), `duration` (0 = until the end),
+  `level`, `callback`, `data`. The message closes when the source ends (callback action `ended`).
+- 503 when no relay is configured or it doesn't answer.
+
+**Limits.** The TV caps relay video so it doesn't stutter:
+
+| | Tizen 6 | Tizen 5 |
+|---|---|---|
+| streams at once | 6 | 4 |
+| combined size of several streams | 1.25 Mpx | 0.75 Mpx |
+| one stream alone | full screen | full screen |
+
+- Video nodes over the stream limit use their `fallback`, or are left out, with a warning.
+- When several streams would exceed the size budget, the new ones are requested smaller from the relay and scaled up into
+  their boxes, with a warning.
+- Streams of other messages count; a message's own earlier streams don't (it is being replaced). Dashboard camera cards
+  count too.
+- `GET /video` shows what is playing (`streams`, `mpx`) and the limits. `POST /config {"video": {"max_streams": 4,
+  "budget_mpx": 0.75}}` changes them for this TV, and the change is kept.
+
+Measured (2026-11-15; relay on an Intel N-series GPU): full screen 1920×800 at about 20–22 fps on all three test TVs
+(two 2021 Frames on Tizen 6.0 and a 2019 TV on Tizen 5.0), with decoding near its limit; 1280 wide and smaller at 24 fps.
+Six 560-wide streams with sound at about 24 fps on the Frames; on the Tizen 5 TV four ran cleanly and six stuttered.
+Earlier on a Frame: one 1080p episode full screen at 21–24 fps;
+six episodes at 560 px wide at 24 fps each, all with sound; a 15 fps camera in a dashboard card. The relay used about 7%
+of a CPU core per stream; its GPU transcodes 1080p at about 13× real time.
+
+---
+
+## 13. Dashboards
+
+`POST /dashboard {"dashboard": "<url_path>", "id": "main"}` shows a Home Assistant dashboard as one transparent message
+and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user's token). The full description is in
+`docs/superpowers/specs/2026-11-15-lovelace-overlay-design.md`. In short:
+
+- Sections, masonry and panel views; view badges; `visibility` and `conditional` rules.
+- Cards: tile, entity, entities, glance, button, sensor (with graph), gauge, history-graph, markdown, heading, todo-list,
+  calendar (agenda), weather-forecast, clock, picture, picture-entity, picture-glance, camera, horizontal/vertical stack,
+  grid, entity-filter, Mushroom (template, entity, title, chips), better-moment, advanced-camera.
+- Read-only: taps do nothing and action-only cards are dropped. Unsupported cards are listed in `GET /dashboard`.
+- Options: `view` (index or path), `x`/`y`/`w`/`h` (region), `scale`, `theme` (`card_bg`, `text`, `secondary_text`,
+  `accent`, `radius`, `card_opacity`), `persist` (default true: comes back after an app restart).
+- Camera cards that name a go2rtc stream play live through the relay; without it, refreshing snapshots.
+
+## 14. Tizen 5 differences
 
 The same request works on both builds; unsupported parts become warnings.
 
@@ -600,7 +677,7 @@ The same request works on both builds; unsupported parts become warnings.
 
 ---
 
-## 13. Full showcase (every safe feature in one message)
+## 15. Full showcase (every safe feature in one message)
 
 Gradient card, rounded live camera view, GIF, markup, a pulsing dot, buttons, a timeout bar, sound and a callback.
 Replace the `data:` placeholders with real base64 and the hosts with allow-listed ones.
@@ -647,7 +724,7 @@ Notes on this layout: the card is inset 10 px inside a 1000×330 window so its e
 
 ---
 
-## 14. Checklist before sending
+## 16. Checklist before sending
 
 - [ ] `root` has `bg` or `gradient`; every `text` has `color`.
 - [ ] All numbers and booleans are unquoted.

@@ -106,18 +106,26 @@ namespace TizenNotifier
                     case "POST /notify": return Notes.Notify(req);
                     case "POST /update": return Notes.Update(req);
                     case "POST /dismiss": return Notes.Dismiss(req);
+                    case "POST /play": return Relay.Play(req);
+                    case "GET /video": return (200, Relay.Usage());
                     case "POST /dashboard": return Dash.Start(req);
                     case "GET /dashboard": return (200, Dash.Status());
                     case "GET /dashboard/tree": return Dash.Tree(query);
                     case "POST /dashboard/stop": return Dash.Stop(req);
                     case "POST /config":
-                        var allow = new List<string>();
                         var a = Json.A(req, "allow");
-                        if (a == null) return (400, Err("allow list missing"));
-                        foreach (var h in a) if (h is string s) allow.Add(s);
-                        Cfg.SaveAllow(allow);
-                        Log.W("allow list set: " + string.Join(",", allow));
-                        return (200, new Dictionary<string, object> { ["ok"] = true, ["allow"] = allow });
+                        if (a == null && Json.O(req, "video") == null) return (400, Err("allow list or video limits missing"));
+                        if (a != null)
+                        {
+                            var allow = new List<string>();
+                            foreach (var h in a) if (h is string s) allow.Add(s);
+                            Cfg.Allow = allow;
+                            Log.W("allow list set: " + string.Join(",", allow));
+                        }
+                        Cfg.SetVideo(Json.O(req, "video"));
+                        Cfg.Save();
+                        return (200, new Dictionary<string, object> { ["ok"] = true, ["allow"] = Cfg.Allow,
+                            ["video"] = new Dictionary<string, object> { ["max_streams"] = (double)Cfg.VideoMaxStreams, ["budget_mpx"] = Cfg.VideoBudgetMpx } });
                 }
                 return (404, Err("no such endpoint"));
             }

@@ -13,6 +13,7 @@ namespace TizenNotifier
         public Dictionary<string, object> Tree;
         public DateTime LastChange = DateTime.UtcNow;
         public int Shows, Updates;
+        public string VideoUrl(string src, int widthPx) => null;   // no relay on the desktop: snapshots
         public void Log(string msg) => Console.Error.WriteLine(DateTime.Now.ToString("HH:mm:ss.fff ") + msg);
         public void Show(DashSession s, Dictionary<string, object> tree) { lock (this) { Tree = tree; Shows++; LastChange = DateTime.UtcNow; } }
         public void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes)

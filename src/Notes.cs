@@ -83,7 +83,8 @@ namespace TizenNotifier
             string id = Json.S(req, "id") ?? ("n" + DateTime.Now.Ticks);
             var warn = new List<object>();
             var files = new List<string>();
-            try { Media.Prepare(Json.O(req, "root"), files, warn); }
+            Relay.Plan(Json.O(req, "root"), id, Json.B(req, "takeover", false), warn);
+            try { Media.Prepare(Json.O(req, "root"), files, warn, Json.B(req, "takeover", false)); }
             catch (Exception e) { Media.Delete(files); return (400, Http.Err(e.Message)); }
             string sound = null;
             var snd = Json.O(req, "sound");

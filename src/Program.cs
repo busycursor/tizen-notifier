@@ -66,7 +66,15 @@ namespace TizenNotifier
         public static string Token = "";
         public static int Port = 9123;
         public static List<string> Allow = new List<string>();
-        public static string HaUrl, HaToken;   // dashboards: base URL and a non-admin user's token (baked in; never logged)
+        public static string HaUrl, HaToken;
+        public static string RelayUrl, RelayToken;   // video relay (relay/): base URL and optional bearer token
+        // Relay video limits, measured 2026-11-15: Tizen 6 Frames ran 6 x 640-wide streams at 24 fps; the Tizen 5 TV ran 4
+        // cleanly and stuttered at 6 (with another app playing underneath). One stream alone may be full screen on both.
+#if TIZEN5
+        public static int VideoMaxStreams = 4; public static double VideoBudgetMpx = 0.75;
+#else
+        public static int VideoMaxStreams = 6; public static double VideoBudgetMpx = 1.25;
+#endif   // dashboards: base URL and a non-admin user's token (baked in; never logged)
         public static string DataDir, ResDir;
         public static readonly DateTime Started = DateTime.Now;
 
@@ -79,19 +87,38 @@ namespace TizenNotifier
             Allow = StrList(Json.A(baked, "allow"));
             HaUrl = Json.S(Json.O(baked, "ha"), "url")?.TrimEnd('/');
             HaToken = Json.S(Json.O(baked, "ha"), "token");
+            RelayUrl = Json.S(Json.O(baked, "relay"), "url")?.TrimEnd('/');
+            RelayToken = Json.S(Json.O(baked, "relay"), "token");
             string ov = System.IO.Path.Combine(DataDir, "config.json");
             if (File.Exists(ov))
             {
-                try { var o = Json.Parse(File.ReadAllText(ov)); if (Json.Has(o, "allow")) Allow = StrList(Json.A(o, "allow")); }
+                try
+                {
+                    var o = Json.Parse(File.ReadAllText(ov));
+                    if (Json.Has(o, "allow")) Allow = StrList(Json.A(o, "allow"));
+                    SetVideo(Json.O(o, "video"));
+                }
                 catch (Exception e) { Log.W("override config unreadable: " + e.Message); }
             }
         }
 
-        public static void SaveAllow(List<string> allow)
+        public static void SetVideo(Dictionary<string, object> v)
         {
-            Allow = allow;
-            File.WriteAllText(System.IO.Path.Combine(DataDir, "config.json"), Json.Write(new Dictionary<string, object> { ["allow"] = allow }));
+            if (v == null) return;
+            if (Json.Get(v, "max_streams") is double m) VideoMaxStreams = Math.Max(0, (int)m);
+            if (Json.Get(v, "budget_mpx") is double b) VideoBudgetMpx = Math.Max(0.05, b);
         }
+
+        // runtime overrides (data/config.json): allow list and video limits
+        public static void Save()
+        {
+            File.WriteAllText(System.IO.Path.Combine(DataDir, "config.json"), Json.Write(new Dictionary<string, object>
+            {
+                ["allow"] = Allow, ["video"] = new Dictionary<string, object> { ["max_streams"] = (double)VideoMaxStreams, ["budget_mpx"] = VideoBudgetMpx },
+            }));
+        }
+
+        public static void SaveAllow(List<string> allow) { Allow = allow; Save(); }
 
         private static List<string> StrList(List<object> l)
         {
@@ -110,7 +137,7 @@ namespace TizenNotifier
             {
                 var u = new Uri(url);
                 if (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "rtsp") return false;
-                if (IsHa(url)) return true;
+                if (IsHa(url) || Relay.IsRelay(url)) return true;
                 foreach (var a in Allow) if (string.Equals(a, u.Host, StringComparison.OrdinalIgnoreCase) || string.Equals(a, u.Host + ":" + u.Port, StringComparison.OrdinalIgnoreCase)) return true;
             }
             catch (Exception) { }

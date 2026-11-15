@@ -84,7 +84,8 @@ namespace TizenNotifier
             public DateTime AudioStarted, LastWrite;
             public double LastChunkMs;
             public long Underruns;
-            public bool NetDone, AudioDone;
+            public bool NetDone, AudioDone, Fitted, Contain = true, CloseOnEnd, AudioRunning;
+            public int BoxW, BoxH;
             public double TrimMs;              // manual A/V trim: + shows video later relative to the sound
 
             // Current media time (ms) from the audio clock, or -1 before audio starts.
@@ -104,7 +105,7 @@ namespace TizenNotifier
         public static View Create(Note n, Dictionary<string, object> spec, int pw, int ph, bool parentLayout, List<object> warn)
         {
             var box = new Dictionary<string, object>(spec);
-            box["type"] = "box"; box.Remove("src"); box.Remove("fit"); box.Remove("stats"); box.Remove("volume"); box.Remove("sync_trim_ms");
+            box["type"] = "box"; box.Remove("src"); box.Remove("fit"); box.Remove("stats"); box.Remove("volume"); box.Remove("sync_trim_ms"); box.Remove("close_on_end");
             var c = Build.Node(n, box, pw, ph, parentLayout, warn);
             int w = (int)c.SizeWidth, h = (int)c.SizeHeight;
             var p = new Player
@@ -113,6 +114,7 @@ namespace TizenNotifier
                 Layers = new[] { new ImageView { Size = Build.Sz(w, h), Position = Build.Ps(0, 0) }, new ImageView { Size = Build.Sz(w, h), Position = Build.Ps(0, 0) } },
             };
             c.Add(p.Layers[0]); c.Add(p.Layers[1]); p.Layers[1].Hide();
+            p.BoxW = w; p.BoxH = h; p.Contain = (Json.S(spec, "fit") ?? "contain") != "fill"; p.CloseOnEnd = Json.B(spec, "close_on_end", false);
             for (int i = 0; i < 2; i++)
             {
                 int idx = i;
@@ -121,6 +123,7 @@ namespace TizenNotifier
             var stop = new Stopper();
             n.Keep.Add(stop);
             string url = Json.S(spec, "src");
+            if (Relay.IsRelay(url)) n.Keep.Add(Relay.Register(n.Id, (double)w * h));
             new Thread(() => Net(p, url, stop)) { IsBackground = true, Name = "mjpeg-net" }.Start();
             return c;
         }
@@ -145,9 +148,36 @@ namespace TizenNotifier
             }
         }
 
+        // Width and height from a JPEG's SOF marker (0,0 if not found).
+        private static (int w, int h) JpegSize(byte[] b)
+        {
+            int i = 2;
+            while (i + 9 < b.Length)
+            {
+                if (b[i] != 0xFF) { i++; continue; }
+                byte m = b[i + 1];
+                if (m >= 0xC0 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) return ((b[i + 7] << 8) | b[i + 8], (b[i + 5] << 8) | b[i + 6]);
+                if (m == 0xD8 || (m >= 0xD0 && m <= 0xD7) || m == 0x01) { i += 2; continue; }
+                i += 2 + ((b[i + 2] << 8) | b[i + 3]);
+            }
+            return (0, 0);
+        }
+
         // any thread: start loading a frame into the hidden layer
         private static void Load(Player p, byte[] jpg, long ts)
         {
+            if (!p.Fitted)
+            {
+                p.Fitted = true;
+                var (fw, fh) = JpegSize(jpg);
+                if (p.Contain && fw > 0 && fh > 0)
+                {
+                    // letterbox: largest size with the frame's shape that fits the node, centred
+                    double s = Math.Min(p.BoxW / (double)fw, p.BoxH / (double)fh);
+                    int lw = (int)Math.Round(fw * s), lh = (int)Math.Round(fh * s);
+                    App.Post(() => { foreach (var l in p.Layers) { l.Size = Build.Sz(lw, lh); l.Position = Build.Ps((p.BoxW - lw) / 2, (p.BoxH - lh) / 2); } });
+                }
+            }
             string f = Path.Combine(p.Folder, "f" + Interlocked.Increment(ref fileSeq) + "-" + DateTime.UtcNow.Ticks.ToString("x") + ".jpg");
             File.WriteAllBytes(f, jpg);
             App.Post(() =>
@@ -169,6 +199,7 @@ namespace TizenNotifier
                 {
                     var req = new HttpRequestMessage(HttpMethod.Get, url);
                     if (Cfg.IsHa(url)) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Cfg.HaToken);
+                    else if (Relay.IsRelay(url) && !string.IsNullOrEmpty(Cfg.RelayToken)) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Cfg.RelayToken);
                     using (var r = Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, stop.Cts.Token).Result)
                     using (var st = r.Content.ReadAsStreamAsync().Result)
                     {
@@ -215,17 +246,36 @@ namespace TizenNotifier
                             StatsTick(p);
                         }
                     }
-                    if (p.HasAudio) break;   // a synced stream that ended is finished (no reconnect mid-programme)
+                    if (p.CloseOnEnd) break;   // a programme that ended is finished; live sources reconnect below
+                    Reset(p);
                 }
                 catch (Exception e)
                 {
                     if (p.N.Closing || stop.Cts.IsCancellationRequested) break;
                     Log.W("mjpeg " + p.N.Id + ": " + (e.InnerException ?? e).Message + " (retrying)");
+                    Reset(p);
                     for (int i = 0; i < 20 && !p.N.Closing; i++) Thread.Sleep(100);
                 }
             }
             lock (p.L) { p.NetDone = true; Monitor.PulseAll(p.L); }
+            if (p.CloseOnEnd && !p.N.Closing && !stop.Cts.IsCancellationRequested)
+            {
+                // let the audio play out, then close the message
+                lock (p.L) { var until = DateTime.UtcNow.AddSeconds(5); while (p.HasAudio && !p.AudioDone && DateTime.UtcNow < until) Monitor.Wait(p.L, 200); }
+                App.Post(() => { if (!p.N.Closing) Notes.Close(p.N, "ended", true); });
+            }
             App.Post(() => { foreach (var f in p.Files) if (f != null) { try { File.Delete(f); } catch (Exception) { } } });
+        }
+
+        // Before reconnecting: the new stream's timestamps start again at 0, so drop what's queued and restart the clock.
+        private static void Reset(Player p)
+        {
+            lock (p.L)
+            {
+                p.Frames.Clear(); p.Audio.Clear();
+                p.AudioStartTs = -1; p.WrittenBytes = 0; p.AudioRunning = false;
+                Monitor.PulseAll(p.L);
+            }
         }
 
         private static int Param(string type, string key, int def)
@@ -249,7 +299,6 @@ namespace TizenNotifier
                 var dev = a;
                 stop.OnStop = () => { try { dev.Pause(); } catch (Exception) { } };
                 lock (p.L) p.DeviceBufferMs = Math.Max(20, a.GetBufferSize() / p.BytesPerMs) * 2;   // device buffer + the one being played
-                bool started = false;
                 while (!stop.Cts.IsCancellationRequested && !p.N.Closing)
                 {
                     byte[] chunk;
@@ -257,12 +306,12 @@ namespace TizenNotifier
                     {
                         while (p.Audio.Count == 0 && !p.NetDone && !stop.Cts.IsCancellationRequested && !p.N.Closing)
                         {
-                            if (started) p.Underruns++;
+                            if (p.AudioRunning) p.Underruns++;
                             Monitor.Wait(p.L, 200);
                         }
                         if (p.Audio.Count == 0) break;
                         chunk = p.Audio.Dequeue();
-                        if (!started) { started = true; p.AudioStarted = DateTime.UtcNow; }
+                        if (!p.AudioRunning) { p.AudioRunning = true; p.AudioStarted = DateTime.UtcNow; }
                     }
                     if (p.Volume < 0.999f)
                         for (int i = 0; i + 1 < chunk.Length; i += 2)
