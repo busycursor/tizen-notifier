@@ -108,6 +108,8 @@ namespace TizenNotifier
             var nodes = Json.O(req, "nodes");
             var warn = new List<object>();
             var files = new List<string>();
+            if (nodes != null) foreach (var kv in nodes)
+                if (kv.Value is Dictionary<string, object> sp && (Json.S(sp, "type") == "icon" || Json.S(sp, "type") == "graph" || Json.S(sp, "type") == "svg")) Media.SvgNode(sp, warn);
             if (nodes != null) foreach (var kv in nodes) if (kv.Value is Dictionary<string, object> p && p.ContainsKey("src")) {
                 try { p["src"] = Media.Resolve(Json.S(p, "src"), files, Json.S(p, "type") == "video"); } catch (Exception e) { warn.Add(kv.Key + ": " + e.Message); p.Remove("src"); } }
             bool found = App.OnMain(() =>
@@ -131,12 +133,17 @@ namespace TizenNotifier
         {
             bool all = Json.B(req, "all", false);
             string id = Json.S(req, "id");
+            var want = (Json.A(req, "ids") ?? new List<object>()).OfType<string>().ToList();
+            if (id != null) want.Add(id);
             int count = App.OnMain(() =>
             {
-                var ids = all ? All.Keys.ToList() : (id != null && All.ContainsKey(id) ? new List<string> { id } : new List<string>());
+                var ids = all ? All.Keys.ToList() : want.Where(All.ContainsKey).ToList();
                 foreach (var i in ids) Close(All[i], "dismissed", true);
                 return ids.Count;
             });
+            // a dismissed dashboard message ends its session (otherwise it would be drawn again on the next change)
+            if (all) Dash.StopIds(null, false);
+            else { var d = want.Where(i => i.StartsWith("dash:")).Select(i => i.Substring(5)).ToList(); if (d.Count > 0) Dash.StopIds(d, false); }
             return (200, new Dictionary<string, object> { ["ok"] = true, ["closed"] = count });
         }
 

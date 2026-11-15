@@ -15,6 +15,8 @@ usage() { sed -n 3,4p "$0" | sed 's/^# *//'; exit 2; }
 : "${TOKEN_FILE:=$HERE/secrets/token-{tv}}"             # per-TV token; created on first build
 : "${ALLOW:=}"                                           # comma-separated hosts the TV may fetch from / call back to
 : "${TIZEN5_TVS:=}"                                      # space-separated TV names that run Tizen 5
+: "${HA_URL:=}"                                          # Home Assistant base URL for dashboards (optional)
+: "${HA_TOKEN_FILE:=}"                                   # per-TV token of a non-admin HA user; {tv} = TV name
 : "${BUILD_DOCKER:=docker}"
 : "${SDK_IMAGE:=mcr.microsoft.com/dotnet/sdk:6.0}"
 : "${TIZEN_TOOLS_IMAGE:=}"                               # empty = use sdb and tizen from this machine
@@ -45,11 +47,16 @@ case "$cmd" in
     ST=$(mktemp -d "$HERE/.stage.XXXXXX"); chmod 700 "$ST"; trap 'rm -rf "$ST"' EXIT
     mkdir -m 700 "$ST/cert"
     cp "$CERT_DIR/author.p12" "$CERT_DIR/distributor.p12" "$CERT_DIR/password" "$ST/cert/"
-    python3 -I - "$tok" "$ALLOW" "$ST/config.json" <<'PY'
+    hatok=${HA_TOKEN_FILE//\{tv\}/$tv}
+    if [ -n "$HA_URL" ] && [ ! -s "$hatok" ]; then echo "HA_URL is set but there is no HA token at $hatok" >&2; exit 2; fi
+    python3 -I - "$tok" "$ALLOW" "$ST/config.json" "$HA_URL" "$hatok" <<'PY'
 import json, sys
-tok, allow, out = sys.argv[1:]
-json.dump({"token": open(tok).read().strip(), "port": 9123,
-           "allow": [h.strip() for h in allow.split(",") if h.strip()]}, open(out, "w"))
+tok, allow, out, ha_url, ha_tok = sys.argv[1:]
+cfg = {"token": open(tok).read().strip(), "port": 9123,
+       "allow": [h.strip() for h in allow.split(",") if h.strip()]}
+if ha_url:
+    cfg["ha"] = {"url": ha_url.rstrip("/"), "token": open(ha_tok).read().strip()}
+json.dump(cfg, open(out, "w"))
 PY
     COPYFILE_DISABLE=1 tar -czf "$ST/b.tgz" --exclude bin --exclude obj -C "$HERE" src -C "$ST" config.json cert
 

@@ -62,10 +62,11 @@ namespace TizenNotifier
 
     internal static class Cfg
     {
-        public const string Version = "1.0.8";
+        public const string Version = "1.1.0";
         public static string Token = "";
         public static int Port = 9123;
         public static List<string> Allow = new List<string>();
+        public static string HaUrl, HaToken;   // dashboards: base URL and a non-admin user's token (baked in; never logged)
         public static string DataDir, ResDir;
         public static readonly DateTime Started = DateTime.Now;
 
@@ -76,6 +77,8 @@ namespace TizenNotifier
             Token = Json.S(baked, "token", "");
             Port = (int)Json.N(baked, "port", 9123);
             Allow = StrList(Json.A(baked, "allow"));
+            HaUrl = Json.S(Json.O(baked, "ha"), "url")?.TrimEnd('/');
+            HaToken = Json.S(Json.O(baked, "ha"), "token");
             string ov = System.IO.Path.Combine(DataDir, "config.json");
             if (File.Exists(ov))
             {
@@ -97,12 +100,17 @@ namespace TizenNotifier
             return r;
         }
 
+        // URLs under the configured Home Assistant base get the HA token (camera snapshots, entity pictures).
+        public static bool IsHa(string url) => !string.IsNullOrEmpty(HaUrl) && !string.IsNullOrEmpty(HaToken) && url != null &&
+            (url == HaUrl || url.StartsWith(HaUrl + "/", StringComparison.OrdinalIgnoreCase));
+
         public static bool Allowed(string url)
         {
             try
             {
                 var u = new Uri(url);
                 if (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "rtsp") return false;
+                if (IsHa(url)) return true;
                 foreach (var a in Allow) if (string.Equals(a, u.Host, StringComparison.OrdinalIgnoreCase) || string.Equals(a, u.Host + ":" + u.Port, StringComparison.OrdinalIgnoreCase)) return true;
             }
             catch (Exception) { }
@@ -135,6 +143,8 @@ namespace TizenNotifier
             Log.Init(Cfg.DataDir);
             Log.W("start v" + Cfg.Version + " runtime " + Environment.Version);
             try { Cfg.Load(); } catch (Exception e) { Log.W("config load failed: " + e.Message); }
+            Mdi.File = System.IO.Path.Combine(Cfg.ResDir, "mdi.tsv.gz");
+            try { if (Directory.Exists(System.IO.Path.Combine(Cfg.DataDir, "svg"))) Directory.Delete(System.IO.Path.Combine(Cfg.DataDir, "svg"), true); } catch (Exception) { }
             foreach (var f in Directory.GetFiles(Cfg.DataDir, "media-*")) { try { File.Delete(f); } catch (Exception) { } }
 
 #if TIZEN5
@@ -152,6 +162,7 @@ namespace TizenNotifier
             };
             pump.Start();
             new Thread(() => Http.Serve(Cfg.Port)) { IsBackground = true, Name = "http" }.Start();
+            Dash.Resume();
         }
 
         // The app has no screen of its own: the main window stays (hiding it gets the app closed) but is transparent,

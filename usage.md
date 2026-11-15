@@ -136,7 +136,7 @@ A node is a JSON object. `root` is a node and every node can have `children`.
 | `gif` | animated GIF, plays and loops automatically | yes | yes |
 | `lottie` | Lottie JSON animation | yes | **no** (warning, empty box) |
 | `progress` | countdown bar | yes | yes |
-| `video` | video player. **Blanks the app underneath.** | needs `takeover` | needs `takeover` |
+| `video` | video player. **Blanks the app underneath, and Art Mode, in either mode.** | needs `takeover` | needs `takeover` |
 | `nui:<ClassName>` | any concrete view class in `Tizen.NUI` (e.g. `nui:TextLabel`, `nui:ImageView`), set up with `props`/`call` | yes | yes |
 
 An unknown `type` becomes a `box` with a warning. There is no `button` type: any node with `action` is a button.
@@ -310,9 +310,51 @@ For a rounded `gif` (or anything else), build the clip box yourself:
   notifier.
 - URLs stream directly (`http`, `https`, `rtsp` on the allow list). `data:` is saved to a file first.
 - `loop` (bool, default `true`) and `mute` (bool, default `true`).
+- `underlay` (bool, default `true`). `false` draws the video as a texture inside the message window instead of
+  the TV's video layer. It plays at full speed (tested 2026-11-15 on a Frame, Tizen 6.0, H.264 MP4 over HTTP).
+  **It still blanks Art Mode.** The art does not come back until Art Mode is switched on again. The hardware decoder
+  is what the other app loses, not only the video layer.
+- **No hardware route leaves the picture underneath intact.** Tizen's MediaCodec answers "Not Supported Feature" on
+  these TVs, and the player only draws to a window's video layer or as a texture. Moving video over other content needs
+  a route with no video decoder: snapshots (6.3) or MJPEG frames.
 - For a camera, use 6.3.
 
-### 6.7 `progress` (tested)
+### 6.7 `mjpeg`: video without the video decoder (tested on T6)
+
+```json
+{"type": "mjpeg", "src": "http://camera.local:1984/api/stream.mjpeg?src=camera", "x": 20, "y": 20, "w": 640, "h": 268, "stats": true}
+```
+
+- `src`: an allow-listed `multipart/x-mixed-replace` MJPEG stream, such as go2rtc's `/api/stream.mjpeg` or Frigate's
+  MJPEG feed.
+- Each frame is a JPEG decoded by the TV's image loader (native, about 5 ms for 640 px wide). Two layers swap when
+  the next frame is ready. A frame that arrives while the previous one is still loading is dropped, so the picture never
+  lags behind.
+- **It never uses the hardware video decoder**, so the picture underneath stays: Art Mode and a video playing in another app both
+  kept playing (2026-11-15, Frame, Tizen 6.0). Measured: 640 px wide at 23.976 and 25 fps with no drops to speak of, starting
+  immediately, using 0.2–0.8 MB/s.
+- The frame is stretched to `w`×`h`. Size the node to the stream's aspect ratio.
+- Picture quality is set where the stream is encoded. go2rtc's default MJPEG quality is low and looks blocky; use
+  `-q:v 3` (in go2rtc's config, because its API refuses sources containing spaces).
+- `stats: true` logs received / shown / dropped fps, bandwidth and load time every 5 s (`GET /log`).
+- **Synced audio and video** in one stream: the parts carry `X-Timestamp: <ms>`, and audio parts are
+  `audio/L16;rate=R;channels=C` (16-bit little-endian PCM, e.g. 50 ms chunks). Send them in timestamp order, about 0.5 s
+  ahead of real time. The node plays the audio on its own output, which is the clock, and shows each frame when that clock
+  reaches it. Late frames are dropped and early ones wait; closing the message stops the audio. `volume` (0..1, default
+  1.0) applies to that audio. `sync_trim_ms` shifts the picture against the sound by hand if a source needs it.
+  Measured: average A/V offset 5–20 ms, under one frame.
+- **Budget:** about 30 megapixels per second of JPEG decoding in total, however it is divided. At 24 fps that is roughly
+  1.25 Mpx of video on screen at once. Measured (2026-11-15, Frame, Tizen 6.0, video playing in another app underneath):
+  - one 1920×800 stream: 20–22 fps
+  - one 1280×534 stream: 23–24 fps
+  - six different 640-wide clips in one message, all with audio: 22.8–24 fps each, A/V offset 6–9 ms
+  - nine 640-wide streams: 16–20 fps each, too many
+- Put several streams in **one message** rather than one message each: separate windows update at different times
+  and the screen visibly "paints" across them.
+- `opacity` on the node, or on a named box around it, blends it with the picture underneath, and can be changed
+  live with `/update`.
+
+### 6.8 `progress` (tested)
 
 ```json
 {"type": "progress", "x": 370, "y": 196, "w": 500, "h": 8, "radius": 4, "bg": "#ffffff22", "color": "#73bfff"}
@@ -512,7 +554,7 @@ Examples:
 | Key | Default | Meaning |
 |---|---|---|
 | `src` | | `data:` URI or allow-listed URL |
-| `volume` | **1.0** | linear sample scale, clamped 0..1. **Always set it.** 0.05 is moderate and 0.3 is already loud. For a 0..1 loudness value, send `loudness³`. |
+| `volume` | **1.0** | linear sample scale, clamped 0..1. **Always set it.** For full-scale sounds (chimes, tones), 0.05 is moderate and 0.3 is already loud. For a 0..1 loudness value, send `loudness³`. **Program audio** (speech and music normalized to -16 LUFS) needs **1.0** to match a video playing in another app; 0.35 was far too quiet. |
 | `engine` | `"raw"` | `raw`: decoded in the app and **mixed over the playing video without interrupting it** (tested). `player`: Tizen media player, **stops the playing app's video**. Don't use it. |
 | `stream` | `"notification"` | `player` engine only: `notification`, `media`, `alarm`, `system` |
 

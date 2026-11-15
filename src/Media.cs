@@ -19,10 +19,12 @@ namespace TizenNotifier
         {
             if (node == null) return;
             string type = (Json.S(node, "type") ?? "box").ToLowerInvariant();
-            if (node.ContainsKey("src") && (type == "image" || type == "gif" || type == "lottie" || type == "video"))
+            if (type == "icon" || type == "graph" || type == "svg") { SvgNode(node, warn); type = "image"; }
+            if (node.ContainsKey("src") && (type == "image" || type == "gif" || type == "lottie" || type == "video" || type == "mjpeg"))
             {
                 string orig = Json.S(node, "src");
-                node["src"] = Resolve(orig, files, type == "video");
+                if (type == "mjpeg" && !orig.StartsWith("http")) throw new ArgumentException("mjpeg src must be an http(s) stream URL");
+                node["src"] = Resolve(orig, files, type == "video" || type == "mjpeg");
                 if (type == "image" && node.ContainsKey("refresh_ms"))
                 {
                     if (orig.StartsWith("http")) node["__refresh_url"] = orig;
@@ -33,10 +35,57 @@ namespace TizenNotifier
             if (kids != null) foreach (var c in kids) Prepare(c as Dictionary<string, object>, files, warn);
         }
 
+        // icon / graph / svg node -> image node with an SVG data: URI (also used by /update when it names one of those types)
+        public static void SvgNode(Dictionary<string, object> n, List<object> warn)
+        {
+            string type = (Json.S(n, "type") ?? "").ToLowerInvariant();
+            string svg = null;
+            int w = (int)Json.N(n, "w", type == "icon" ? 48 : 300), h = (int)Json.N(n, "h", type == "icon" ? 48 : 100);
+            if (type == "icon")
+            {
+                if (Mdi.Path(Json.S(n, "icon")) == null) warn.Add("unknown icon " + Json.S(n, "icon"));
+                svg = Svg.Icon(Json.S(n, "icon"), Json.S(n, "color") ?? "#ffffff");
+            }
+            else if (type == "graph")
+            {
+                var xs = new List<double>(); var ys = new List<double>();
+                var pts = Json.A(n, "points"); var vals = Json.A(n, "values");
+                if (pts != null) foreach (var p in pts) { if (p is List<object> pl && pl.Count >= 2 && pl[0] is double x && pl[1] is double y) { xs.Add(x); ys.Add(y); } }
+                else if (vals != null) for (int i = 0; i < vals.Count; i++) if (vals[i] is double y) { xs.Add(i); ys.Add(y); }
+                double? mn = Json.Has(n, "min") ? Json.N(n, "min", 0) : (double?)null, mx = Json.Has(n, "max") ? Json.N(n, "max", 0) : (double?)null;
+                svg = Svg.Graph(xs, ys, w, h, Json.S(n, "color") ?? "#73bfff", Json.N(n, "width", 3), Json.N(n, "fill_opacity", 0.25), mn, mx);
+            }
+            else if (type == "svg") svg = Json.S(n, "svg");
+            foreach (var k in new[] { "icon", "points", "values", "width", "fill_opacity", "min", "max", "svg" }) n.Remove(k);
+            if (type == "icon" || type == "graph") n.Remove("color");
+            n["type"] = "image"; n["fit"] = "fill";
+            if (svg != null) n["src"] = Svg.DataUri(svg);
+        }
+
+        // SVGs are small and repeat a lot (icons, live graphs): one cached file per distinct content, never per note.
+        private static string SvgFile(byte[] bytes)
+        {
+            string dir = Path.Combine(Cfg.DataDir, "svg");
+            Directory.CreateDirectory(dir);
+            string name;
+            using (var sha = System.Security.Cryptography.SHA1.Create()) name = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+            string p = Path.Combine(dir, name + ".svg");
+            if (!File.Exists(p))
+            {
+                if (Directory.GetFiles(dir).Length > 3000) foreach (var f in Directory.GetFiles(dir)) { try { File.Delete(f); } catch (Exception) { } }
+                string tmp = p + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                File.WriteAllBytes(tmp, bytes);
+                try { File.Move(tmp, p); } catch (IOException) { try { File.Delete(tmp); } catch (Exception) { } }   // another thread wrote it first
+            }
+            return p;
+        }
+
         // data: URI -> file; allow-listed URL -> file (or the URL itself when streaming is fine)
         public static string Resolve(string src, List<string> files, bool streamOk)
         {
             if (string.IsNullOrEmpty(src)) throw new ArgumentException("empty src");
+            if (src.StartsWith("data:image/svg+xml;base64,"))
+                return SvgFile(Convert.FromBase64String(src.Substring(26)));
             if (src.StartsWith("data:"))
             {
                 int comma = src.IndexOf(',');
@@ -48,7 +97,9 @@ namespace TizenNotifier
             }
             if (!Cfg.Allowed(src)) throw new ArgumentException("host not in allow list: " + SafeHost(src));
             if (streamOk) return src;
-            var r = Client.GetAsync(src).Result;
+            var req = new HttpRequestMessage(HttpMethod.Get, src);
+            if (Cfg.IsHa(src)) req.Headers.TryAddWithoutValidation("Authorization", "Bearer " + Cfg.HaToken);
+            var r = Client.SendAsync(req).Result;
             if (!r.IsSuccessStatusCode) throw new ArgumentException("fetch " + SafeHost(src) + " -> HTTP " + (int)r.StatusCode);
             if (r.Content.Headers.ContentLength > MaxFile) throw new ArgumentException("fetched media too large");
             var data = r.Content.ReadAsByteArrayAsync().Result;

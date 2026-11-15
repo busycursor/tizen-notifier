@@ -1,6 +1,7 @@
 // Creates and disposes each optional feature on this TV; nothing is shown. Result also appears in /info as "capabilities".
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -79,6 +80,86 @@ namespace TizenNotifier
             finally { w.Dispose(); }
         }
 #endif
+        // GET /probe: what this TV's media stack offers, found by reflection (nothing is decoded or shown).
+        public static Dictionary<string, object> Probe()
+        {
+            var d = new Dictionary<string, object>();
+            void T(string name, Func<object> f)
+            {
+                try { d[name] = f(); }
+                catch (Exception e) { var x = e is System.Reflection.TargetInvocationException && e.InnerException != null ? e.InnerException : e; d[name] = "ERR " + x.GetType().Name + ": " + x.Message; }
+            }
+            List<object> Members(Type t, string filter = null) => t == null ? null : t.GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly)
+                .Where(m => m.MemberType == System.Reflection.MemberTypes.Property || m.MemberType == System.Reflection.MemberTypes.Method || m.MemberType == System.Reflection.MemberTypes.Constructor)
+                .Select(m => m.MemberType == System.Reflection.MemberTypes.Constructor ? "ctor(" + string.Join(",", ((System.Reflection.ConstructorInfo)m).GetParameters().Select(p => p.ParameterType.Name)) + ")" : m.Name)
+                .Where(n => !n.StartsWith("get_") && !n.StartsWith("set_") && !n.StartsWith("add_") && !n.StartsWith("remove_") && (filter == null || n.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0))
+                .Distinct().OrderBy(n => n).Cast<object>().ToList();
+            Type Find(string asm, string type)
+            {
+                try { return System.Reflection.Assembly.Load(new System.Reflection.AssemblyName(asm)).GetType(type); } catch (Exception) { return null; }
+            }
+            T("videoview_members", () => Members(typeof(VideoView)));
+            T("videoview_has_underlay", () => typeof(VideoView).GetProperty("Underlay") != null);
+            var mc = Find("Tizen.Multimedia.MediaCodec", "Tizen.Multimedia.MediaCodec.MediaCodec");
+            T("mediacodec_type", () => mc?.FullName ?? "not found");
+            T("mediacodec_members", () => Members(mc));
+            T("mediacodec_video_codecs", () =>
+            {
+                var list = mc.GetProperty("SupportedVideoCodecs", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)?.GetValue(null) as System.Collections.IEnumerable;
+                var outp = new List<object>();
+                if (list == null) return "no SupportedVideoCodecs";
+                object inst = Activator.CreateInstance(mc);
+                try
+                {
+                    var get = mc.GetMethods().FirstOrDefault(m => m.Name == "GetCodecType" && m.GetParameters().Length == 2 && m.GetParameters()[1].ParameterType.Name.Contains("Video"));
+                    foreach (var codec in list)
+                    {
+                        string dec = "?", enc = "?";
+                        try { dec = get?.Invoke(inst, new object[] { false, codec })?.ToString(); } catch (Exception e) { dec = "ERR " + (e.InnerException ?? e).Message; }
+                        try { enc = get?.Invoke(inst, new object[] { true, codec })?.ToString(); } catch (Exception e) { enc = "ERR " + (e.InnerException ?? e).Message; }
+                        outp.Add(codec + " decoder=" + dec + " encoder=" + enc);
+                    }
+                }
+                finally { (inst as IDisposable)?.Dispose(); }
+                return outp;
+            });
+            var disp = Find("Tizen.Multimedia", "Tizen.Multimedia.Display");
+            T("player_display_ctors", () => Members(disp, "ctor"));
+            T("player_members_display", () => Members(Find("Tizen.Multimedia", "Tizen.Multimedia.Player"), "Display"));
+            T("player_video_frame", () => Members(Find("Tizen.Multimedia", "Tizen.Multimedia.Player"), "Frame"));
+            T("nui_native_image_source", () => Members(typeof(View).Assembly.GetType("Tizen.NUI.NativeImageSource")));
+            T("nui_pixel_data", () => Members(typeof(View).Assembly.GetType("Tizen.NUI.PixelData")));
+            T("nui_encoded_image_buffer", () => Members(typeof(View).Assembly.GetType("Tizen.NUI.EncodedImageBuffer")) ?? (object)"not found");
+            T("nui_image_url", () => Members(typeof(View).Assembly.GetType("Tizen.NUI.ImageUrl")) ?? (object)"not found");
+            // raw-pixel route: any way (public or not) to show a NativeImageSource / PixelData buffer
+            var nuiAsm = typeof(View).Assembly;
+            var all = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static;
+            T("nui_native_image_source_all", () => nuiAsm.GetType("Tizen.NUI.NativeImageSource")?.GetMembers(all).Select(m => m.Name).Where(x => !x.StartsWith("get_") && !x.StartsWith("set_")).Distinct().OrderBy(x => x).Cast<object>().ToList());
+            T("nui_generate_url_like", () =>
+            {
+                var hits = new List<object>();
+                Type[] types;
+                try { types = nuiAsm.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+                foreach (var t in types)
+                    foreach (var m in t.GetMethods(all | System.Reflection.BindingFlags.DeclaredOnly))
+                        if (m.Name.IndexOf("GenerateUrl", StringComparison.OrdinalIgnoreCase) >= 0 || m.Name.IndexOf("NativeImage", StringComparison.OrdinalIgnoreCase) >= 0 && m.Name.IndexOf("Url", StringComparison.OrdinalIgnoreCase) >= 0
+                            || (m.Name.IndexOf("PixelData", StringComparison.OrdinalIgnoreCase) >= 0 && (m.Name.IndexOf("Url", StringComparison.OrdinalIgnoreCase) >= 0 || m.Name.IndexOf("Texture", StringComparison.OrdinalIgnoreCase) >= 0)))
+                            hits.Add(t.FullName + "." + m.Name + "(" + string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name)) + ")" + (m.IsPublic ? "" : " [non-public]"));
+                return hits.Distinct().Take(60).ToList();
+            });
+            T("nui_texture_types", () =>
+            {
+                Type[] types;
+                try { types = nuiAsm.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException e) { types = e.Types.Where(t => t != null).ToArray(); }
+                return types.Where(t => t.Name == "Texture" || t.Name == "TextureSet" || t.Name == "Shader" || t.Name == "Renderer" || t.Name == "Geometry" || t.Name == "NativeImage" || t.Name == "ImageUrl")
+                    .Select(t => t.FullName + (t.IsPublic ? "" : " [non-public]") + ": " + string.Join(",", t.GetConstructors(all).Select(c => "ctor(" + string.Join(",", c.GetParameters().Select(p => p.ParameterType.Name)) + ")")) + " | " +
+                        string.Join(",", t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly).Select(m => m.Name).Distinct()))
+                    .Cast<object>().ToList();
+            });
+            T("tizen_assemblies", () => AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetName().Name).Where(n => n.StartsWith("Tizen")).OrderBy(n => n).Cast<object>().ToList());
+            return d;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void Audio()
         {

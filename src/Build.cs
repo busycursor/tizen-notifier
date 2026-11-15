@@ -33,6 +33,7 @@ namespace TizenNotifier
                 wrap["__image_wrap"] = true;
                 return Node(n, wrap, pw, ph, parentLayout, warn);
             }
+            if (type == "mjpeg") return Mjpeg.Create(n, spec, pw, ph, parentLayout, warn);
             if (type == "image" && spec.ContainsKey("refresh_ms") && spec.ContainsKey("__refresh_url"))
                 return RefreshImage(n, spec, pw, ph, parentLayout, warn);
             View v;
@@ -180,7 +181,7 @@ namespace TizenNotifier
                 case "shadow": SetShadow(v, val as Dictionary<string, object>); return;
                 case "fit": return; // handled with src
                 case "src": SetSrc(v, Json.S(s, "type"), val as string, s, warn); return;
-                case "loop": case "mute": return; // handled with src
+                case "loop": case "mute": case "underlay": return; // handled with src
                 case "color":
                     if (t != null) t.TextColor = Col(val);
                     else if (Json.S(s, "type") == "progress") { var f = FindChild(v, "progress-fill"); if (f != null) f.BackgroundColor = Col(val); }
@@ -389,7 +390,7 @@ namespace TizenNotifier
             {
                 case "gif": SetGif(v, src); return;
                 case "lottie": SetLottie(v, src, (int)Json.N(s, "loop", -1)); return;
-                case "video": SetVideo(v, src, Json.B(s, "loop", true), Json.B(s, "mute", true)); return;
+                case "video": SetVideo(v, src, Json.B(s, "loop", true), Json.B(s, "mute", true), Json.B(s, "underlay", true)); return;
             }
             warn.Add("src ignored on " + type);
         }
@@ -493,7 +494,8 @@ namespace TizenNotifier
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] private static View MakeVideo() => new VideoView();
-        [MethodImpl(MethodImplOptions.NoInlining)] private static void SetVideo(View v, string src, bool loop, bool mute) { var vv = (VideoView)v; vv.ResourceUrl = src; vv.Looping = loop; try { Reflect.Set(vv, "Mute", mute); } catch (Exception) { try { Reflect.Set(vv, "Muted", mute); } catch (Exception) { } } vv.Play(); }
+        // underlay false = draw the video as a texture in our window instead of the TV's video plane; set before the URL.
+        [MethodImpl(MethodImplOptions.NoInlining)] private static void SetVideo(View v, string src, bool loop, bool mute, bool underlay) { var vv = (VideoView)v; if (!underlay) { try { Reflect.Set(vv, "Underlay", false); } catch (Exception) { } } vv.ResourceUrl = src; vv.Looping = loop; try { Reflect.Set(vv, "Mute", mute); } catch (Exception) { try { Reflect.Set(vv, "Muted", mute); } catch (Exception) { } } vv.Play(); }
 
         private static View MakeNui(string cls)
         {

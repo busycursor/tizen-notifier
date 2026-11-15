@@ -101,10 +101,15 @@ namespace TizenNotifier
                         foreach (var p in query.Split('&')) if (p.StartsWith("n=") && int.TryParse(p.Substring(2), out var x)) n = Math.Max(1, Math.Min(300, x));
                         return (200, new Dictionary<string, object> { ["log"] = Log.Tail(n) });
                     case "POST /selftest": return (200, SelfTest.Run());
+                    case "GET /probe": return (200, SelfTest.Probe());
                     case "POST /host": return (200, App.OnMain(() => Surface.Host(Json.A(req, "actions"))));
                     case "POST /notify": return Notes.Notify(req);
                     case "POST /update": return Notes.Update(req);
                     case "POST /dismiss": return Notes.Dismiss(req);
+                    case "POST /dashboard": return Dash.Start(req);
+                    case "GET /dashboard": return (200, Dash.Status());
+                    case "GET /dashboard/tree": return Dash.Tree(query);
+                    case "POST /dashboard/stop": return Dash.Stop(req);
                     case "POST /config":
                         var allow = new List<string>();
                         var a = Json.A(req, "allow");
