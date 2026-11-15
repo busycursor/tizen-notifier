@@ -2,7 +2,7 @@
 # Home Assistant package: put it in /config/packages/ (homeassistant: packages: !include_dir_named packages).
 #
 #   script.tizen_notify          simple fields (title/message/image/sound/buttons) -> a ready-made card,
-#                                or `payload` = a full notifier request (any layout; see the header of src/Notes.cs)
+#                                or `payload` = a full notifier request (any layout; see usage.md)
 #   script.tizen_notify_dismiss  close one message by id, or all
 # Both start the notifier if it isn't running (power-off kills it) but never turn a TV on.
 # Tizen 5 TVs: no rounded corners, shadows or Lottie; the same requests work (warnings only).

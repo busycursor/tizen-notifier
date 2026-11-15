@@ -13,13 +13,8 @@ namespace TizenNotifier
 {
     internal static class Build
     {
-#if TIZEN5
         public static Size Sz(float w, float h) => new Size(w, h, 0);
         public static Position Ps(float x, float y) => new Position(x, y, 0);
-#else
-        public static Size Sz(float w, float h) => Sz(w, h);
-        public static Position Ps(float x, float y) => Ps(x, y);
-#endif
         public static View Node(Note n, Dictionary<string, object> spec, int pw, int ph, bool parentLayout, List<object> warn)
         {
             if (spec == null) return new View();
@@ -49,7 +44,7 @@ namespace TizenNotifier
                     case "text": v = new TextLabel(); break;
                     case "image": v = new ImageView(); break;
                     case "gif": v = MakeGif(); break;
-                    case "lottie": v = MakeLottie(); break;
+                    case "lottie": v = MakeLottie(); n.Keep.Add(v); break;   // stopped before the note is torn down (Notes.StopKeep)
                     case "video":
                         // VideoView takes the TV's video plane: the playing app goes black and does not recover (Frame, Tizen 6.0, 2026-11-14)
                         if (!Json.B(n.Req, "takeover", false)) { warn.Add("video node skipped: it blanks the app underneath; send \"takeover\": true to allow it"); v = new View(); spec = new Dictionary<string, object>(spec); spec.Remove("src"); spec["type"] = "box"; type = "box"; break; }
@@ -480,6 +475,23 @@ namespace TizenNotifier
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetGif(View v, string src) { var g = (AnimatedImageView)v; g.ResourceUrl = src; g.Play(); }
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetLottie(View v, string src, int loop) { var l = (LottieAnimationView)v; l.URL = src; l.LoopCount = loop; l.Play(); }
 #endif
+        // A Lottie view still playing when its window is disposed killed the app on Tizen 6.0 (2026-11-15):
+        // stop it and take it off the tree first.
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static bool StopMedia(object k)
+        {
+#if !TIZEN5
+            if (k is LottieAnimationView l)
+            {
+                try { l.Stop(); } catch (Exception) { }
+                try { l.Unparent(); } catch (Exception) { }
+                l.Dispose();
+                return true;
+            }
+#endif
+            return false;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)] private static View MakeVideo() => new VideoView();
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetVideo(View v, string src, bool loop, bool mute) { var vv = (VideoView)v; vv.ResourceUrl = src; vv.Looping = loop; try { Reflect.Set(vv, "Mute", mute); } catch (Exception) { try { Reflect.Set(vv, "Muted", mute); } catch (Exception) { } } vv.Play(); }
 

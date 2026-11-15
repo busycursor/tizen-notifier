@@ -277,6 +277,7 @@ namespace TizenNotifier
 
         private static void DisposeNote(Note n)
         {
+            Log.W("closing " + n.Id);
             if (All.TryGetValue(n.Id, out var cur) && cur == n) All.Remove(n.Id);
             foreach (var k in n.Keep) StopKeep(k);
             n.Keep.Clear();
@@ -292,6 +293,7 @@ namespace TizenNotifier
         {
             try
             {
+                if (Build.StopMedia(k)) return;
                 if (k is Animation a) { a.Stop(); a.Dispose(); }
                 else if (k is Timer t) { t.Stop(); t.Dispose(); }
                 else if (k is IDisposable d) d.Dispose();

@@ -101,7 +101,7 @@ Details:
 | POST | `/config` | `{allow: [hosts]}`: persist the allow list |
 | POST | `/host` | Tizen 5 build only: report or drive the shared host window (diagnostics) |
 
-**The full request schema is the header comment of `src/Notes.cs`.** In short:
+**The full request reference, with every property, tested recipes and the button rules, is [usage.md](usage.md).** In short:
 
 ```json
 { "id": "front-door", "duration": 10, "w": 900, "h": 230, "anchor": "top-right", "margin": 60,
