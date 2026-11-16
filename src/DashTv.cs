@@ -117,13 +117,17 @@ namespace TizenNotifier
         private static bool WantsArt(DashSession s) => s.Opt.ArtMode ?? ArtDefault;
 
         // Is the Art Mode app in front? On an error: yes (never hide a dashboard because the question failed).
+        private static long artChecks, artTicks;   // how many checks, and their total time (load diagnostics)
+
         private static bool ArtNow()
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 bool art = Tizen.Applications.ApplicationManager.GetRunningApplicationsAsync().Result
                     .Any(c => c.ApplicationId == ArtApp && c.State == Tizen.Applications.ApplicationRunningContext.AppState.Foreground);
                 artErrorLogged = false;
+                System.Threading.Interlocked.Increment(ref artChecks); System.Threading.Interlocked.Add(ref artTicks, sw.ElapsedTicks);
                 return art;
             }
             catch (Exception e)
@@ -164,6 +168,8 @@ namespace TizenNotifier
                 {
                     ["ok"] = true, ["configured"] = !string.IsNullOrEmpty(Cfg.HaUrl), ["ha_connected"] = ha?.Connected ?? false,
                     ["art_mode"] = artSeen,
+                    ["art_checks"] = (double)artChecks,
+                    ["art_check_ms"] = artChecks == 0 ? 0.0 : Math.Round(artTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency / artChecks, 2),
                     ["sessions"] = Sessions.Values.Select(s => (object)s.StatusInfo()).ToList(),
                 };
         }

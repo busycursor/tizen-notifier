@@ -240,6 +240,7 @@ namespace TizenNotifier
             {
                 ["ok"] = true, ["version"] = Cfg.Version, ["runtime"] = Environment.Version.ToString(),
                 ["uptime_s"] = (int)(DateTime.Now - Cfg.Started).TotalSeconds,
+                ["cpu_s"] = Math.Round(System.Diagnostics.Process.GetCurrentProcess().TotalProcessorTime.TotalSeconds, 2),   // this app's CPU time since start
                 ["screen"] = scr == null ? null : new List<object> { scr.Width, scr.Height },
                 ["active"] = ids, ["allow"] = Cfg.Allow, ["port"] = Cfg.Port,
                 ["capabilities"] = SelfTest.Last,
