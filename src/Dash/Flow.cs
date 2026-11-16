@@ -35,12 +35,18 @@ namespace TizenNotifier
                 if (b > 0) { holder["h"] = b; items.Add(new FlowItem { Key = "badges", Cfg = new Dictionary<string, object>(), Node = holder, H = b }); }
             }
             var secs = Json.A(view, "sections") ?? new List<object>();
+            bool upward = (Json.S(c.T.Params, "origin") ?? "bottom-left").StartsWith("bottom");
             for (int si = 0; si < secs.Count; si++)
             {
                 if (!(secs[si] is Dictionary<string, object> sec) || !c.Visible(sec)) continue;
                 var cards = Json.A(sec, "cards") ?? new List<object>();
+                var part = new List<FlowItem>();
                 for (int ci = 0; ci < cards.Count; ci++)
-                    if (cards[ci] is Dictionary<string, object> cfg) Add(c, items, "s" + si + ".c" + ci, cfg, cw);
+                    if (cards[ci] is Dictionary<string, object> cfg) Add(c, part, "s" + si + ".c" + ci, cfg, cw);
+                // a heading labels its section: it sits above the section's cards, so when columns fill upward it is
+                // placed after them
+                if (upward) part = part.Where(i => Cards.T(i.Cfg) != "heading").Concat(part.Where(i => Cards.T(i.Cfg) == "heading")).ToList();
+                items.AddRange(part);
             }
             var vcards = Json.A(view, "cards") ?? new List<object>();
             for (int ci = 0; ci < vcards.Count; ci++)
@@ -50,6 +56,8 @@ namespace TizenNotifier
 
         private static void Add(Ctx c, List<FlowItem> items, string key, Dictionary<string, object> cfg, double cw)
         {
+            // a heading with nothing in it takes no space
+            if (Cards.T(cfg) == "heading" && string.IsNullOrWhiteSpace(Json.S(cfg, "heading")) && (Json.A(cfg, "badges") ?? new List<object>()).Count == 0) return;
             var (draw, slot) = c.Decide(key, cfg);
             if (slot)
             {

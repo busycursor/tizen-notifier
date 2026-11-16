@@ -122,5 +122,36 @@ namespace TizenNotifier
             var c = Cards(tree);
             Assert.Equal(new[] { "d.c0", "d.c1" }, c.Keys.ToArray());
         }
+
+        private static Dictionary<string, object> Heading(string text) => P("type", "heading", "heading", text);
+
+        [Fact]
+        public void HeadingStaysAboveItsSectionFromBottom()
+        {
+            var (tree, _) = Flow(View(new[] { Heading("Clock"), Tile(2), Tile(2) }));
+            var c = Cards(tree);
+            double h = N(c["d.s0.c0"], "y"), top = new[] { N(c["d.s0.c1"], "y"), N(c["d.s0.c2"], "y") }.Min();
+            Assert.True(h < top);                                                   // above the section's cards
+            Assert.Equal(top - G - N(c["d.s0.c0"], "h"), h);                        // right on top of them
+            Assert.Equal(H - M - Rows(2), N(c["d.s0.c1"], "y"));                    // the first card still starts the corner
+        }
+
+        [Fact]
+        public void HeadingFirstFromTop()
+        {
+            var (tree, _) = Flow(View(new[] { Heading("Clock"), Tile(2) }), "top-left");
+            var c = Cards(tree);
+            Assert.Equal(M, N(c["d.s0.c0"], "y"));
+            Assert.True(N(c["d.s0.c1"], "y") > N(c["d.s0.c0"], "y"));
+        }
+
+        [Fact]
+        public void EmptyHeadingTakesNoSpace()
+        {
+            var (tree, _) = Flow(View(new[] { Heading(""), Tile(2) }));
+            var c = Cards(tree);
+            Assert.False(c.ContainsKey("d.s0.c0"));
+            Assert.Equal(H - M - Rows(2), N(c["d.s0.c1"], "y"));
+        }
     }
 }
