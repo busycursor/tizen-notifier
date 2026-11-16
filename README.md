@@ -172,6 +172,9 @@ address the TV uses to reach Home Assistant (that host must be in `ALLOW`).
   - **Camera images** use `/api/camera_proxy/<entity>?token=<access_token>`, so the TV holds no Home Assistant login.
     These tokens rotate, so very long-lived `refresh_ms` views may stop updating.
 - `script.tizen_notify_dismiss`: close one message (`id`) or all.
+- `script.tizen_dashboard`: start or stop a Home Assistant dashboard on a TV (`tv`, `action`, `dashboard`, `view`,
+  `options`). On a Frame the TV shows it only while Art Mode is in front, so an automation only needs to decide the
+  hours (for example start at the end of the night, stop at the start of it).
 - `script.tizen_notifier_ensure`: health check, and a restart over `:8001` if the notifier is down. The TV must be on.
   It uses the package's `rest_command.tizen_notifier_tv_api_get` / `_post` (the TV's own API).
 
@@ -208,7 +211,6 @@ Adding a TV: add its entry to the `tvs` maps and the `tv` selectors in the scrip
 | `dash-host/`, `tools/preview.py` | render a dashboard on a desktop and draw it as a PNG (layout checks without a TV) |
 | `dash-tests/` | tests for the dashboard renderer (offline: `docker run --rm -v "$PWD":/w -w /w/dash-tests mcr.microsoft.com/dotnet/sdk:6.0 dotnet test`) |
 | `src/res/fonts/` | Inter and Roboto (static cuts) with their licenses, for dashboard themes and `"font"` on text nodes |
-| `docs/` | design notes |
 | `examples/` | the requests used in testing |
 | `testassets/` | test GIF, Lottie and sounds (generated for this project) |
 

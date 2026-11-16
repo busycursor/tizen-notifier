@@ -25,6 +25,8 @@ namespace TizenNotifier
 
         public string VideoUrl(string src, int widthPx) => Relay.Url(src, widthPx, 0, true);
 
+        public void Hide(DashSession s) => Notes.CloseById("dash:" + s.Opt.Id);
+
         public void Patch(DashSession s, Dictionary<string, object> ops)
         {
             var req = new Dictionary<string, object>(ops) { ["id"] = "dash:" + s.Opt.Id };
@@ -69,7 +71,9 @@ namespace TizenNotifier
                 if (Sessions.TryGetValue(opt.Id, out var old)) { old.Dispose(); Sessions.Remove(opt.Id); }
                 var s = new DashSession(opt, Client(), Host);
                 Sessions[opt.Id] = s;
+                if (WantsArt(s) && !ArtNow()) s.SetVisible(false);   // started while someone is watching: don't flash over it
                 s.Start();
+                Watch();
                 if (Json.B(r, "persist", true)) Save();
             }
             Log.W("dash " + opt.Id + ": start " + opt.Dashboard + (opt.View != null ? " view " + opt.View : ""));
@@ -99,12 +103,67 @@ namespace TizenNotifier
             return stop.Count;
         }
 
+        // ---- Art Mode: a dashboard with art_mode (the default on Frames) shows only while the Art Mode app is in front ----
+#if TIZEN5
+        private const bool ArtDefault = false;   // no Art Mode on Tizen 5 TVs
+#else
+        private const bool ArtDefault = true;
+#endif
+        private const string ArtApp = "org.tizen.art-app";
+        private static Thread watcher;
+        private static bool? artSeen;
+        private static bool artErrorLogged;
+
+        private static bool WantsArt(DashSession s) => s.Opt.ArtMode ?? ArtDefault;
+
+        // Is the Art Mode app in front? On an error: yes (never hide a dashboard because the question failed).
+        private static bool ArtNow()
+        {
+            try
+            {
+                bool art = Tizen.Applications.ApplicationManager.GetRunningApplicationsAsync().Result
+                    .Any(c => c.ApplicationId == ArtApp && c.State == Tizen.Applications.ApplicationRunningContext.AppState.Foreground);
+                artErrorLogged = false;
+                return art;
+            }
+            catch (Exception e)
+            {
+                if (!artErrorLogged) { artErrorLogged = true; Log.W("art mode check failed: " + (e.InnerException ?? e).Message); }
+                return true;
+            }
+        }
+
+        // One background loop for all sessions: about once a second while any of them follows Art Mode.
+        private static void Watch()
+        {
+            lock (L)
+            {
+                if (watcher != null) return;
+                watcher = new Thread(() =>
+                {
+                    while (true)
+                    {
+                        Thread.Sleep(1000);
+                        List<DashSession> follow;
+                        lock (L) follow = Sessions.Values.Where(WantsArt).ToList();
+                        if (follow.Count == 0) continue;
+                        bool art = ArtNow();
+                        if (artSeen != art) Log.W("art mode " + (art ? "on" : "off"));
+                        artSeen = art;
+                        foreach (var s in follow) try { s.SetVisible(art); } catch (Exception e) { Log.W("dash " + s.Opt.Id + ": " + e.Message); }
+                    }
+                }) { IsBackground = true, Name = "art-watch" };
+                watcher.Start();
+            }
+        }
+
         public static Dictionary<string, object> Status()
         {
             lock (L)
                 return new Dictionary<string, object>
                 {
                     ["ok"] = true, ["configured"] = !string.IsNullOrEmpty(Cfg.HaUrl), ["ha_connected"] = ha?.Connected ?? false,
+                    ["art_mode"] = artSeen,
                     ["sessions"] = Sessions.Values.Select(s => (object)s.StatusInfo()).ToList(),
                 };
         }

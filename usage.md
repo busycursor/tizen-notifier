@@ -660,8 +660,7 @@ of a CPU core per stream; its GPU transcodes 1080p at about 13× real time.
 ## 13. Dashboards
 
 `POST /dashboard {"dashboard": "<url_path>", "id": "main"}` shows a Home Assistant dashboard as one transparent message
-and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user's token). The full description is in
-`docs/superpowers/specs/2026-11-15-lovelace-overlay-design.md`. In short:
+and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user's token). In short:
 
 - Sections, masonry and panel views; view badges; `visibility` and `conditional` rules.
 - Built-in cards: tile, entity, entities, glance, button, sensor (with graph), gauge, history-graph, statistics-graph,
@@ -680,6 +679,15 @@ and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user
 - Read-only: taps do nothing and action-only cards are dropped. Unsupported cards are listed in `GET /dashboard`.
 - Request options: `view` (index or path), `persist` (default true: comes back after an app restart), plus any of the
   settings below. A request only overrides the settings it actually contains.
+- **Art Mode** (app 1.2.0+, Tizen 6): a dashboard is shown only while the Frame's Art Mode is in front. The notifier
+  checks the foreground app about once a second: when someone starts watching, the dashboard leaves the screen within
+  about a second (cameras stop); when the TV goes back to Art Mode, it is drawn again. `"art_mode": false` shows it
+  regardless (the default on Tizen 5 builds, which have no Art Mode). `GET /dashboard` reports `art_mode` (what the TV
+  sees) and each session's `hidden`.
+- An empty dashboard (created in Home Assistant, never saved) draws nothing and appears as soon as it is saved.
+- Home Assistant: `script.tizen_dashboard` (`tv`, `action: start|stop`, `dashboard`, `view`, `options`) in
+  `ha/tizen_notifier.yaml`. Typical use: start a Frame's dashboard when the day starts and stop it at night; the TV
+  handles Art Mode on its own.
 
 ### 13.1 Settings in the dashboard: `tv_overlay`
 

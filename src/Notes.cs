@@ -354,6 +354,12 @@ namespace TizenNotifier
         }
 
         // reason != null -> report it to the callback
+        // Take a message off screen at once (a dashboard leaving with Art Mode); nothing else is stopped.
+        public static void CloseById(string id)
+        {
+            App.OnMain(() => { if (All.TryGetValue(id, out var n)) Close(n, null, false); return true; });
+        }
+
         public static void Close(Note n, string reason, bool animate)
         {
             if (n.Closing) return;

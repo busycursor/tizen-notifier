@@ -8,3 +8,5 @@ src/res/config.json
 *.p12
 device-profile.xml
 .DS_Store
+docs/superpowers/
+.superpowers/

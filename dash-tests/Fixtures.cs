@@ -12,6 +12,8 @@ namespace TizenNotifier
         public int VideoUrlCalls, ShowCalls, UpdateCalls, PatchCalls;
         public List<Dictionary<string, object>> PatchesSent = new List<Dictionary<string, object>>();
         public bool ThrowOnPatch;
+        public int HideCalls;
+        public void Hide(DashSession s) { HideCalls++; }
         public void Patch(DashSession s, Dictionary<string, object> ops) { if (ThrowOnPatch) throw new System.TimeoutException("main loop busy"); PatchCalls++; PatchesSent.Add(ops); }
         public Dictionary<string, object> LastShow;
         public List<Dictionary<string, Dictionary<string, object>>> UpdatesSent = new List<Dictionary<string, Dictionary<string, object>>>();

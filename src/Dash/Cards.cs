@@ -945,7 +945,7 @@ namespace TizenNotifier
         // (the card then shows snapshots). The TV applies its video limits and falls back to `snap` on its own.
         private static Dictionary<string, object> LiveCamera(Ctx c, string entity, string go2rtcStream, string go2rtcHost, double w, double h, string snap)
         {
-            if (c.S.Measuring) return null;                              // a hidden card being measured asks for nothing
+            if (c.S.Measuring || c.S.Hidden) return null;                // measuring, or off screen: no streams
             if (c.S.Host.VideoUrl("probe", 160) == null) return null;   // relay not available right now
             string src = go2rtcStream != null && go2rtcHost != null ? "rtsp://" + go2rtcHost + ":8554/" + go2rtcStream : c.S.CameraStream(entity);
             if (src == null) return null;

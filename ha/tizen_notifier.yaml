@@ -4,6 +4,7 @@
 #   script.tizen_notify          simple fields (title/message/image/sound/buttons) -> a ready-made card,
 #                                or `payload` = a full notifier request (any layout; see usage.md)
 #   script.tizen_notify_dismiss  close one message by id, or all
+#   script.tizen_dashboard       start or stop a dashboard on a TV (on Frames it shows only while Art Mode is in front)
 # Both start the notifier if it isn't running (power-off kills it) but never turn a TV on.
 # Tizen 5 TVs: no rounded corners, shadows or Lottie; the same requests work (warnings only).
 #
@@ -231,6 +232,82 @@ script:
           body: "{{ {'id': id} if id is defined and id else {'all': true} }}"
         response_variable: r
         continue_on_error: true
+      - variables:
+          result: "{{ r.content if r is defined and r.status == 200 else {'ok': false, 'status': r.status if r is defined else none} }}"
+      - stop: done
+        response_variable: result
+
+  # Start or stop a Home Assistant dashboard drawn by the notifier (see usage.md "Dashboards"). On a Frame the TV itself
+  # shows it only while Art Mode is in front, so this only decides when it is allowed at all (e.g. a daytime window).
+  tizen_dashboard:
+    alias: "Tizen Notifier - start or stop a dashboard"
+    mode: parallel
+    fields:
+      tv:
+        description: TV key (as in `tvs` below)
+        required: true
+        default: living_room
+        selector:
+          select:
+            options:
+            - living_room
+      action:
+        description: start or stop
+        required: true
+        default: start
+        selector:
+          select:
+            options: [start, stop]
+      dashboard:
+        description: Dashboard url_path (for start)
+        selector:
+          text:
+      view:
+        description: View index or path (optional)
+        selector:
+          text:
+      options:
+        description: More /dashboard options (e.g. art_mode, theme, scale)
+        selector:
+          object:
+    sequence:
+      - variables:
+          tvs:
+            living_room: {host: 192.168.1.50}
+          cfg: "{{ tvs.get(tv | default('living_room')) }}"
+      - if: "{{ action == 'start' }}"
+        then:
+          - action: script.tizen_notifier_ensure
+            data: {host: "{{ cfg.host }}"}
+            response_variable: up
+          - if: "{{ not up.ok }}"
+            then:
+              - variables: {result: "{{ up }}"}
+              - stop: notifier not running
+                response_variable: result
+          - variables:
+              body: >-
+                {{ dict([('dashboard', dashboard), ('id', 'main')]
+                        + ((options.items() | list) if options is defined and options is mapping else [])
+                        + ([('view', view | string)] if view is defined and view is not none and view != '' else [])) }}
+          - action: "rest_command.tizen_notifier_{{ tv }}"
+            data: {endpoint: dashboard, body: "{{ body }}"}
+            response_variable: r
+            continue_on_error: true
+        else:
+          - action: rest_command.tizen_notifier_health
+            data: {host: "{{ cfg.host }}"}
+            response_variable: h
+            continue_on_error: true
+          - if: "{{ not (h is defined and h.status == 200) }}"
+            then:
+              - variables: {result: {ok: true, stopped: 0, note: "notifier not running"}}
+              - stop: nothing to stop
+                response_variable: result
+          - action: "rest_command.tizen_notifier_{{ tv }}"
+            data: {endpoint: dashboard/stop, body: {id: main}}
+            response_variable: r
+            continue_on_error: true
       - variables:
           result: "{{ r.content if r is defined and r.status == 200 else {'ok': false, 'status': r.status if r is defined else none} }}"
       - stop: done
