@@ -698,7 +698,7 @@ configuration editor); a view may carry its own `tv_overlay` to override it; a c
 
 ```yaml
 tv_overlay:
-  theme: ambient            # default | lovelace | ambient
+  theme: ambient            # default | lovelace | ambient | fullscreen
   scale: 2.33               # x, y, w, h, scale, opacity (whole overlay, 0..1), as_user, conditionals
   conditionals: reserve     # instant | reserve | crossfade | slide
   ambient:                  # parameters of a theme, under its name
@@ -723,6 +723,9 @@ views:
 - **`lovelace`**: Home Assistant's own dark theme: opaque `#1c1c1c` cards, `#e1e1e1` / `#9b9b9b` text, Roboto, HA's
   current calendar colors (ended events at half strength), idle thermostat rings dimmed. Same layout as `default`.
   Parameter `background` (default `false`): `true` draws HA's `#111111` view background behind the cards.
+- **`fullscreen`**: `default`'s look on a solid background that covers the whole screen, for a dashboard instead of
+  the art. Parameters `background` (default `#111111`) and `margin` (default 12, the edge margin; `default` uses the
+  frontend's 32). On a Frame it still shows only while Art Mode is in front.
 - **`ambient`**: a quiet theme for sitting over art. The view's structure is ignored: every card, in config order
   (badges first, then section cards by section, then view cards), flows in fixed-width columns from a corner. Each
   column fills from the corner's edge toward the opposite one, then the next column steps sideways away from the

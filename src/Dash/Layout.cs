@@ -21,20 +21,23 @@ namespace TizenNotifier
             Ui.WidthFactor = ctx.T.WidthFactor;
             var root = Ui.Box(0, 0, W, H);
             if (ctx.T.Name == "lovelace" && Json.B(ctx.T.Params, "background", false)) Ui.Add(root, Ui.Box(0, 0, W, H, "#111111"));
+            if (ctx.T.Name == "fullscreen") Ui.Add(root, Ui.Box(0, 0, W, H, Json.S(ctx.T.Params, "background") ?? "#111111"));
+            double Pad = ctx.Margin;
             if (ctx.T.Layout == "flow")
             {
                 Flow.Place(ctx, root, Flow.Collect(ctx, view), W, H);
                 return Finished(s, ctx, root, scale);
             }
             string type = Json.S(view, "type") ?? (Json.Has(view, "sections") ? "sections" : Json.B(view, "panel", false) ? "panel" : "masonry");
-            double top = 24;   // the badge row sits 24 px from the top; sections follow below it
+            double edge = ctx.T.Name == "fullscreen" ? Pad : 24;
+            double top = edge;   // the badge row sits 24 px from the top (fullscreen: the margin); sections follow below it
             var badges = Json.A(view, "badges");
             if (badges != null && badges.Count > 0)
             {
                 double b = BadgeRow(ctx, root, badges, W, top);
-                if (b >= 0) top = b + (type == "sections" ? 24 : Gap);
+                if (b >= 0) top = b + (type == "sections" ? edge : Gap);
             }
-            else top = type == "sections" ? 24 : Pad;
+            else top = type == "sections" ? edge : Pad;
             switch (type)
             {
                 case "custom:grid-layout": case "custom:masonry-layout": case "custom:horizontal-layout": case "custom:vertical-layout":
@@ -73,6 +76,7 @@ namespace TizenNotifier
 
         private static double BadgeRow(Ctx c, Dictionary<string, object> root, List<object> badges, double W, double top)
         {
+            double Pad = c.Margin;
             var built = new List<Dictionary<string, object>>();
             foreach (var b in badges)
             {
@@ -106,6 +110,7 @@ namespace TizenNotifier
         // ---------- sections ----------
         private static void Sections(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double top)
         {
+            double Pad = c.Margin;
             var all = Json.A(view, "sections") ?? new List<object>();
             var secs = Enumerable.Range(0, all.Count).Where(i => all[i] is Dictionary<string, object> d && c.Visible(d)).Select(i => (sec: (Dictionary<string, object>)all[i], si: i)).ToList();
             if (secs.Count == 0) return;
@@ -222,6 +227,7 @@ namespace TizenNotifier
         // ---------- masonry / panel ----------
         private static void Masonry(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double top)
         {
+            double Pad = c.Margin;
             var raw = Json.A(view, "cards") ?? new List<object>();
             int n = Math.Max(1, Math.Min((int)Json.N(view, "max_columns", 4), (int)Math.Floor(W / 500)));
             double colW = Math.Min(492, (W - 2 * Pad - Gap * (n - 1)) / n);
@@ -260,6 +266,7 @@ namespace TizenNotifier
 
         private static void Panel(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double H, double top)
         {
+            double Pad = c.Margin;
             var cfg = (Json.A(view, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().FirstOrDefault();
             if (cfg == null || !c.Decide("c0", cfg).draw) return;
             var eff = Cards.Effective(c, cfg);
@@ -318,6 +325,8 @@ namespace TizenNotifier
         public readonly DashTheme T;
         public Palette P => T.P;
         public readonly double ViewW;
+        // edge margin of the view: the frontend's 32, or fullscreen's own (smaller) margin
+        public double Margin => T.Name == "fullscreen" ? Json.N(T.Params, "margin", 12) : Layout.Pad;
         public readonly Dictionary<string, string> SvgCache = new Dictionary<string, string>();   // recolored SVGs, this render
         public Ctx(DashSession s, double viewW) { S = s; ViewW = viewW; T = DashTheme.From(s.Eff); }
         public bool Visible(Dictionary<string, object> cfg) => Conditions.All(S, Json.Get(cfg, "visibility"), ViewW);

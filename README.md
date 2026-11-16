@@ -8,7 +8,8 @@ Messages can carry text, pictures, a live-ish camera view, GIFs, Lottie animatio
 sound. Every look is defined in the request, so new layouts never need a new install.
 
 It can also show a **Home Assistant dashboard** as a live, read-only overlay (for example over Art Mode), in one of
-three themes set from the dashboard itself (`default`, a faithful `lovelace`, and a quiet single-color `ambient`), and play
+four themes set from the dashboard itself (`default`, a faithful `lovelace`, a quiet single-color `ambient`, and
+`fullscreen`, which replaces the art), and play
 **video with sound in a window or full screen without the TV's video decoder**, so the picture underneath keeps playing.
 Video goes through a small relay (`relay/`) that transcodes on another machine's GPU.
 

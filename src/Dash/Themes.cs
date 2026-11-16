@@ -2,6 +2,7 @@
 //   default:  today's look (translucent cards, system font), HA-matched layout.
 //   lovelace: HA's own dark theme (colors sampled from HA screenshots of the scratch views, 2026-11-15), Roboto.
 //   ambient:  one foreground color, translucent tiles, Inter, corner flow layout (Flow.cs, Recolor.cs).
+//   fullscreen: default's look on a solid background covering the whole screen, with smaller margins.
 using System;
 using System.Collections.Generic;
 
@@ -60,7 +61,7 @@ namespace TizenNotifier
                         MinFill = Math.Max(0, Math.Min(1, Json.N(p, "fill_opacity", 0.45))),
                     };
                     break;
-                default:
+                default:   // default and fullscreen (which only adds a background and smaller margins)
                     t.P = Palette.From(p);
                     break;
             }

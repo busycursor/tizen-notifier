@@ -19,7 +19,7 @@ namespace TizenNotifier
     internal static class Settings
     {
         public const string Key = "tv_overlay";
-        public static readonly string[] Themes = { "default", "lovelace", "ambient" };
+        public static readonly string[] Themes = { "default", "lovelace", "ambient", "fullscreen" };
         public static readonly string[] CondModes = { "instant", "reserve", "crossfade", "slide" };
         private static readonly string[] Numbers = { "x", "y", "w", "h", "scale", "opacity" };
         private static readonly HashSet<string> Known = new HashSet<string>(new[] { "theme", "as_user", "conditionals" }.Concat(Numbers).Concat(Themes));
@@ -30,6 +30,8 @@ namespace TizenNotifier
         {
             ["default"] = new Dictionary<string, object>(),
             ["lovelace"] = new Dictionary<string, object> { ["background"] = false },
+            // fullscreen: default's look on a solid background over the whole screen, instead of the art
+            ["fullscreen"] = new Dictionary<string, object> { ["background"] = "#111111", ["margin"] = 12.0 },
             // ambient: settled on a Frame over Art Mode in the evening (2026-11-15): smallest text 28 px on the 1080 layer
             // (scale 2.33), a light frosted tile, white text with a thin outline and a soft shadow
             ["ambient"] = new Dictionary<string, object>
