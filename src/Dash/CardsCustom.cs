@@ -69,7 +69,7 @@ namespace TizenNotifier
                 foreach (var e in kv.Value)
                 {
                     bool on = !e.AllDay && e.Start <= now && e.End > now;
-                    string col = e.Color ?? CalColor(new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "entities") }, e);
+                    string col = e.Color ?? CalColor(c, new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "entities") }, e);
                     Ui.Add(card, Ui.Box(x, ey + 4, 3, 40, col, 2));
                     string time = e.AllDay ? "All day" : e.Start.ToString("h:mm tt", CultureInfo.InvariantCulture).ToLowerInvariant() + " – " + e.End.ToString("h:mm tt", CultureInfo.InvariantCulture).ToLowerInvariant();
                     Ui.Add(card, Ui.Text(x + 12, ey + 2, tw - 130, 18, time, 12, P.Secondary));
@@ -117,7 +117,7 @@ namespace TizenNotifier
                 double ey = y, x = P.Pad + 60, tw = w - x - P.Pad;
                 foreach (var e in kv.Value)
                 {
-                    string col = e.Color ?? CalColor(new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "entities") }, e);
+                    string col = e.Color ?? CalColor(c, new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "entities") }, e);
                     var row = Ui.Box(x, ey + 2, tw, 40, Theme.WithAlpha(col, 0.12), 6);
                     Ui.Add(row, Ui.Box(0, 0, 4, 40, col, 2));
                     Ui.Add(row, Ui.Text(12, 2, tw - 20, 20, e.Summary, 14, P.Text));
@@ -390,7 +390,7 @@ namespace TizenNotifier
                 foreach (var e in kv.Value.OrderBy(e => e.AllDay ? 0 : 1).ThenBy(e => e.Start))
                 {
                     if (ey + 42 > h - P.Pad) break;
-                    string col = e.Color ?? CalColors[Math.Max(0, Cals(new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "calendars") ?? Json.Get(cfg, "entities") }).Select(z => z.Item1).ToList().IndexOf(e.CalendarId)) % CalColors.Length];
+                    string col = e.Color ?? c.P.Series[Math.Max(0, Cals(new Dictionary<string, object> { ["entities"] = Json.Get(cfg, "calendars") ?? Json.Get(cfg, "entities") }).Select(z => z.Item1).ToList().IndexOf(e.CalendarId)) % c.P.Series.Length];
                     var chip = Ui.Box(x + 4, ey, cw - 8, 40, Theme.WithAlpha(col, 0.35), 6);
                     Ui.Add(chip, Ui.Box(0, 0, 4, 40, col, 2));
                     Ui.Add(chip, Ui.Text(10, 2, cw - 22, 18, e.AllDay ? "All day" : e.Start.ToString("h:mm tt", CultureInfo.InvariantCulture).ToLowerInvariant(), 11, "#ffffffb0"));

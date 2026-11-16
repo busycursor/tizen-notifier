@@ -15,29 +15,23 @@ namespace TizenNotifier
         void Log(string msg);
         void Show(DashSession s, Dictionary<string, object> tree);                    // first render, or structure changed
         void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes);   // same structure: changed props by node name
+        void Patch(DashSession s, Dictionary<string, object> ops);   // same cards, some changed inside: {nodes, replace} (Notes.Update)
         string VideoUrl(string src, int widthPx);   // live video through the relay, or null (then cards use snapshots)
     }
 
     internal sealed class DashOptions
     {
         public string Id = "main", Dashboard, View;   // View: index ("0") or path; null = first
-        public double X, Y, W = 1920, H = 1080, Scale = 1.0;
-        public string AsUser;                         // evaluate `user` conditions as this user id instead of the token's user
-        public Dictionary<string, object> Theme = new Dictionary<string, object>();
-        public Dictionary<string, object> Raw;        // the request, for persistence
+        public Dictionary<string, object> Raw;        // the request, for persistence; layout options are read from it by Settings
+        public HashSet<string> Present = new HashSet<string>();   // keys the request contained (only those override tv_overlay)
         public Dictionary<string, object> Config;     // inline Lovelace config instead of reading `dashboard` from HA
 
         public static DashOptions From(Dictionary<string, object> r)
         {
-            var o = new DashOptions { Raw = r };
+            var o = new DashOptions { Raw = r, Present = new HashSet<string>(r.Keys) };
             o.Id = Json.S(r, "id") ?? "main";
             o.Dashboard = Json.S(r, "dashboard");
             o.View = Json.S(r, "view");
-            o.X = Json.N(r, "x", 0); o.Y = Json.N(r, "y", 0);
-            o.W = Json.N(r, "w", 1920 - o.X); o.H = Json.N(r, "h", 1080 - o.Y);
-            o.Scale = Math.Max(0.25, Math.Min(4, Json.N(r, "scale", 1.0)));
-            o.AsUser = Json.S(r, "as_user");
-            o.Theme = Json.O(r, "theme") ?? new Dictionary<string, object>();
             o.Config = Json.O(r, "config");
             if (o.Dashboard == null && o.Config != null) o.Dashboard = "inline";
             return o;
@@ -80,7 +74,8 @@ namespace TizenNotifier
         private Dictionary<string, Dictionary<string, object>> shownFlat;
         private string shownShape;
         private Timer debounce, minute;
-        public List<string> Unsupported = new List<string>(), Offscreen = new List<string>();
+        public List<string> Unsupported = new List<string>(), Offscreen = new List<string>(), Warnings = new List<string>();
+        public EffectiveOptions Eff = new EffectiveOptions();   // settings of the latest render
         public int CardsDrawn, Shows, Updates;
         public string Status = "starting", LastError;
         public DateTime LastRender;
@@ -90,6 +85,43 @@ namespace TizenNotifier
         {
             Opt = opt; Ha = ha; Host = host;
         }
+
+        // No HA at all (tests): config and states are given, nothing is fetched or subscribed.
+        public bool IsOffline { get; private set; }
+        public static DashSession Offline(DashOptions opt, IDashHost host, IEnumerable<Ent> ents)
+        {
+            var s = new DashSession(opt, new HaClient("http://ha.invalid", "", host.Log), host) { IsOffline = true };
+            s.Config = opt.Config;
+            foreach (var e in ents) s.states[e.Id] = e;
+            s.Status = "live";
+            return s;
+        }
+
+        // Drop subscriptions for templates no render asked for any more (called under L after a render).
+        internal void DropUnusedTemplates()
+        {
+            foreach (var k in templates.Where(t => !t.Value.used && t.Value.sub >= 0).Select(t => t.Key).ToList()) { Ha.Unsubscribe(templates[k].sub); templates.Remove(k); }
+            foreach (var k in templates.Keys.ToList()) templates[k] = (templates[k].sub, templates[k].value, false);
+        }
+
+        // Tests: give a template a value as if HA had rendered it (a live subscription id, so it can be dropped).
+        internal void SetTemplateValueForTest(string tpl, string value)
+        {
+            lock (L) foreach (var k in templates.Keys.Where(k => k.EndsWith("\u0001" + tpl)).ToList()) templates[k] = (1000, value, templates[k].used);
+        }
+
+        // Tests: change one entity's state without HA.
+        internal void SetStateForTest(string id, string state)
+        {
+            lock (L) { if (!states.TryGetValue(id, out var e)) states[id] = e = new Ent { Id = id }; e.State = state; }
+        }
+
+        // While true, a card is only being measured (a hidden card keeping its slot): data getters return what is cached and
+        // start nothing, cameras ask for no stream. Renders of one session never overlap (renderLock).
+        public bool Measuring;
+
+        // Background work that talks to HA (fetches, subscriptions).
+        private void Bg(Action a) { if (!IsOffline) Task.Run(a); }
 
         public void Start()
         {
@@ -260,7 +292,7 @@ namespace TizenNotifier
 
         public Ent State(string id) => id != null && states.TryGetValue(id, out var e) ? e : null;
         public IEnumerable<string> AllEntityIds() => states.Keys.ToList();
-        public string EffectiveUser => Opt.AsUser ?? UserId;
+        public string EffectiveUser => Eff.AsUser ?? UserId;
         public DateTime NowUtc => DateTime.UtcNow;
         public DateTime NowLocal => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, Tz);
         public DateTime ToLocal(double unix) => TimeZoneInfo.ConvertTimeFromUtc(DateTimeOffset.FromUnixTimeMilliseconds((long)(unix * 1000)).UtcDateTime, Tz);
@@ -272,9 +304,16 @@ namespace TizenNotifier
             if (string.IsNullOrEmpty(tpl)) return tpl;
             if (!tpl.Contains("{{") && !tpl.Contains("{%")) return tpl;
             string key = Json.Write(vars ?? new Dictionary<string, object>()) + "\u0001" + tpl;
+            if (Measuring)
+            {
+                // keep what a hidden card uses alive (so its slot keeps its size), but start nothing new
+                if (!templates.TryGetValue(key, out var tm)) return null;
+                templates[key] = (tm.sub, tm.value, true);
+                return tm.value;
+            }
             if (templates.TryGetValue(key, out var t)) { templates[key] = (t.sub, t.value, true); return t.value; }
             templates[key] = (-1, null, true);
-            Task.Run(() =>
+            Bg(() =>
             {
                 try
                 {
@@ -298,6 +337,7 @@ namespace TizenNotifier
         public (List<double> t, List<double> v) History(string id, double hours)
         {
             string key = id + "|" + hours.ToString(CultureInfo.InvariantCulture);
+            if (Measuring) return history.TryGetValue(key, out var hm) ? (hm.t, hm.v) : (new List<double>(), new List<double>());
             if (history.TryGetValue(key, out var h))
             {
                 history[key] = (h.t, h.v, h.fetched, true, h.busy);
@@ -317,7 +357,7 @@ namespace TizenNotifier
         private void FetchHistory(string key, string id, double hours)
         {
             if (history.TryGetValue(key, out var h0)) history[key] = (h0.t, h0.v, h0.fetched, h0.used, true);
-            Task.Run(() =>
+            Bg(() =>
             {
                 var t = new List<double>(); var v = new List<double>();
                 try
@@ -341,6 +381,7 @@ namespace TizenNotifier
 
         public List<Dictionary<string, object>> Todo(string id)
         {
+            if (Measuring) return todos.TryGetValue(id, out var tm) ? tm.items : null;
             var e = State(id);
             if (todos.TryGetValue(id, out var td))
             {
@@ -358,7 +399,7 @@ namespace TizenNotifier
             var e = State(id);
             string st = e?.State;
             if (todos.TryGetValue(id, out var t0)) todos[id] = (t0.items, st, true, t0.used);
-            Task.Run(() =>
+            Bg(() =>
             {
                 List<Dictionary<string, object>> items = null;
                 try
@@ -381,6 +422,7 @@ namespace TizenNotifier
             foreach (var (id, color) in cals)
             {
                 string key = id + "|" + start.ToString("yyyy-MM-dd") + "|" + days;
+                if (Measuring) { if (calendars.TryGetValue(key, out var cm) && cm.ev != null) all.AddRange(cm.ev); continue; }
                 string st = State(id)?.State;
                 if (calendars.TryGetValue(key, out var c))
                 {
@@ -397,7 +439,7 @@ namespace TizenNotifier
         private void FetchCalendar(string key, string id, DateTime startLocal, int days, string color)
         {
             if (calendars.TryGetValue(key, out var c0)) calendars[key] = (c0.ev, c0.fetched, c0.state, true, c0.used);
-            Task.Run(() =>
+            Bg(() =>
             {
                 var list = new List<CalEvent>();
                 try
@@ -450,10 +492,11 @@ namespace TizenNotifier
             string key = string.Join(",", ids) + "|" + hours.ToString(CultureInfo.InvariantCulture);
             string sig = string.Join(",", ids.Select(i => State(i)?.LastChanged.ToString(CultureInfo.InvariantCulture) ?? ""));
             logbooks.TryGetValue(key, out var lb);
+            if (Measuring) return lb.rows;
             if (lb.rows == null || (!lb.busy && (lb.sig != sig || (DateTime.UtcNow - lb.fetched).TotalSeconds > 60)))
             {
                 logbooks[key] = (lb.rows, lb.fetched, sig, true);
-                Task.Run(() =>
+                Bg(() =>
                 {
                     var rows = new List<Dictionary<string, object>>();
                     try
@@ -478,12 +521,12 @@ namespace TizenNotifier
 
         public string CameraStream(string entityId)
         {
-            if (entityId == null || !entityId.StartsWith("camera.")) return null;
+            if (entityId == null || !entityId.StartsWith("camera.") || Measuring) return null;
             streams.TryGetValue(entityId, out var st);
             if (!st.busy && (st.fetched == default(DateTime) || (DateTime.UtcNow - st.fetched).TotalSeconds > (st.url == null ? 120 : 60)))
             {
                 streams[entityId] = (st.url, st.fetched, true);
-                Task.Run(() =>
+                Bg(() =>
                 {
                     string url = null;
                     try { url = Json.S(Ha.Call(new Dictionary<string, object> { ["type"] = "camera/stream", ["entity_id"] = entityId }), "url"); }
@@ -502,10 +545,11 @@ namespace TizenNotifier
         private object Stat(string key, Dictionary<string, object> msg)
         {
             stats.TryGetValue(key, out var st);
+            if (Measuring) return st.value;
             if (!st.busy && (st.value == null || (DateTime.UtcNow - st.fetched).TotalMinutes > 5))
             {
                 stats[key] = (st.value, st.fetched, true);
-                Task.Run(() =>
+                Bg(() =>
                 {
                     object v = null;
                     try { v = Ha.Call(msg); } catch (Exception e) { Host.Log("dash statistics: " + e.Message); }
@@ -546,9 +590,10 @@ namespace TizenNotifier
         public List<Forecast> Forecasts(string id, string type)
         {
             string key = id + "|" + type;
+            if (Measuring) return forecasts.TryGetValue(key, out var fm) ? fm.f : null;
             if (forecasts.TryGetValue(key, out var f)) { forecasts[key] = (f.sub, f.f, true); return f.f; }
             forecasts[key] = (-1, null, true);
-            Task.Run(() =>
+            Bg(() =>
             {
                 try
                 {
@@ -605,15 +650,14 @@ namespace TizenNotifier
                     foreach (var k in templates.Keys.ToList()) templates[k] = (templates[k].sub, templates[k].value, false);
                     var view = CurrentView();
                     ViewTitle = Json.S(view, "title");
-                    Unsupported = new List<string>(); Offscreen = new List<string>();
+                    Unsupported = new List<string>(); Offscreen = new List<string>(); Warnings = new List<string>();
                     CardsDrawn = 0;
                     tree = Layout.Render(this, view);
                     // first draw: give templates / history / lists that were just requested a moment to arrive, so the
                     // overlay appears once instead of drawing and immediately redrawing
                     bool waiting = templates.Values.Any(t => t.value == null && t.sub != -2) || history.Values.Any(h => h.busy) || todos.Values.Any(t => t.busy) || calendars.Values.Any(c => c.busy);
                     if (shownShape == null && waiting && (DateTime.UtcNow - loadedAt).TotalSeconds < 2.5) { if (!disposed) try { debounce.Change(300, Timeout.Infinite); } catch (ObjectDisposedException) { } return; }
-                    // drop subscriptions for templates no render asked for any more
-                    foreach (var k in templates.Where(t => !t.Value.used && t.Value.sub >= 0).Select(t => t.Key).ToList()) { Ha.Unsubscribe(templates[k].sub); templates.Remove(k); }
+                    DropUnusedTemplates();
                     LastRender = DateTime.UtcNow;
                 }
             }
@@ -621,29 +665,122 @@ namespace TizenNotifier
             Publish(tree);
         }
 
-        // Same structure as what is shown -> only changed properties; otherwise a full show.
+        // ---- conditional transitions ----
+        // LastCond: what the latest render decided for each conditional card; ShownCond: what is on screen.
+        internal Dictionary<string, (bool visible, string mode)> LastCond, ShownCond;
+        private Dictionary<string, object> pendingTree;   // waiting for a fade to finish; the newest tree wins
+        private Dictionary<string, (bool visible, string mode)> pendingCond;
+        private bool pendingFadeIn;
+        private Timer pendingTimer;
+        public const int FadeMs = 400, CrossfadeMs = 300;
+
+        internal void MarkShown(Dictionary<string, object> tree) => ShownCond = LastCond;
+        internal void PublishForTest(Dictionary<string, object> tree) { lock (renderLock) Publish(tree); }
+
+        private static List<object> Fade(double? from, double to, double ms)
+        {
+            var a = new Dictionary<string, object> { ["prop"] = "opacity", ["to"] = to, ["ms"] = ms };
+            if (from != null) a["from"] = from.Value;
+            return new List<object> { a };
+        }
+
+        // Before a conditional card disappears (reserve, slide) it fades out; a crossfade card fades the whole overlay out
+        // and the new one in. Otherwise the tree goes out at once.
         private void Publish(Dictionary<string, object> tree)
         {
+            try { PublishCore(tree); }
+            catch (Exception e) { Lost(e); }
+        }
+
+        // A host call failed (main loop busy, a node that couldn't be built): what is on screen is unknown, so the next
+        // publish is a full show.
+        private void Lost(Exception e)
+        {
+            Host.Log("dash " + Opt.Id + ": publish failed: " + (e.InnerException ?? e).Message);
+            shownShape = null; shownSkeleton = null; ShownCond = null;
+        }
+
+        private void PublishCore(Dictionary<string, object> tree)
+        {
+            var cond = LastCond ?? new Dictionary<string, (bool, string)>();
+            if (pendingTimer != null) { pendingTree = tree; pendingCond = cond; return; }
+            if (ShownCond != null && shownShape != null)
+            {
+                var flipped = cond.Keys.Union(ShownCond.Keys)
+                    .Where(k => (cond.TryGetValue(k, out var a) && a.visible) != (ShownCond.TryGetValue(k, out var b) && b.visible)).ToList();
+                string Mode(string k) => cond.TryGetValue(k, out var a) ? a.mode : ShownCond[k].mode;
+                if (flipped.Any(k => Mode(k) == "crossfade"))
+                {
+                    Host.Update(this, new Dictionary<string, Dictionary<string, object>> { ["d"] = new Dictionary<string, object> { ["animate"] = Fade(null, 0, CrossfadeMs) } });
+                    Pending(tree, cond, CrossfadeMs, true);
+                    return;
+                }
+                var hiding = flipped.Where(k => (Mode(k) == "reserve" || Mode(k) == "slide") && ShownCond.TryGetValue(k, out var b) && b.visible && shownFlat.ContainsKey("d." + k)).ToList();
+                if (hiding.Count > 0)
+                {
+                    Host.Update(this, hiding.ToDictionary(k => "d." + k, k => new Dictionary<string, object> { ["animate"] = Fade(null, 0, FadeMs) }));
+                    Pending(tree, cond, FadeMs, false);
+                    return;
+                }
+            }
+            PublishNow(tree, cond, false);
+        }
+
+        private void Pending(Dictionary<string, object> tree, Dictionary<string, (bool visible, string mode)> cond, int ms, bool fadeIn)
+        {
+            pendingTree = tree; pendingCond = cond; pendingFadeIn = fadeIn;
+            pendingTimer = new Timer(_ =>
+            {
+                lock (renderLock)
+                {
+                    if (disposed) return;
+                    var t = pendingTree; var cd = pendingCond; bool fi = pendingFadeIn;
+                    pendingTimer?.Dispose(); pendingTimer = null; pendingTree = null; pendingCond = null;
+                    if (t != null) try { PublishNow(t, cd, fi); } catch (Exception e) { Lost(e); }
+                }
+            }, null, ms, Timeout.Infinite);
+        }
+
+        // Same structure as what is shown -> only changed properties; otherwise a full show.
+        private void PublishNow(Dictionary<string, object> tree, Dictionary<string, (bool visible, string mode)> cond, bool fadeIn)
+        {
+            ShownCond = cond;
+            if (fadeIn)
+            {
+                var root = Json.O(tree, "root");
+                if (root != null) root["animate"] = Fade(0, Json.N(root, "opacity", 1), CrossfadeMs);   // goes out with the changes
+            }
             var flat = new Dictionary<string, Dictionary<string, object>>();
             var shape = new System.Text.StringBuilder();
             Flatten(Json.O(tree, "root"), flat, shape);
-            string sh = shape.ToString() + "|" + Json.Write(new[] { Json.Get(tree, "w"), Json.Get(tree, "h"), Json.Get(tree, "x"), Json.Get(tree, "y") });
+            string geo = "|" + Json.Write(new[] { Json.Get(tree, "w"), Json.Get(tree, "h"), Json.Get(tree, "x"), Json.Get(tree, "y") });
+            string sh = shape.ToString() + geo;
+            var cards = new Dictionary<string, (Dictionary<string, object> node, string shape)>();
+            var skel = new System.Text.StringBuilder();
+            Skeleton(Json.O(tree, "root"), skel, cards);
+            string sk = skel.ToString() + geo;
+            if (shownShape != null && sh != shownShape && sk != shownSkeleton && Restructure(tree, flat, sh, sk, cards, cond)) return;
+            if (shownShape != null && sh != shownShape && sk == shownSkeleton)
+            {
+                // same cards in the same places; some changed inside: replace just those, update the rest in place, so
+                // live video in the other cards keeps playing
+                Patches++;
+                var replace = new Dictionary<string, object>();
+                foreach (var kv in cards) if (!shownCards.TryGetValue(kv.Key, out var was) || was != kv.Value.shape) replace[kv.Key] = kv.Value.node;
+                bool Inside(string name) => replace.Keys.Any(r => name == r || name.StartsWith(r + "."));
+                var changes = Diff(flat.Where(kv => !Inside(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value));
+                shownTree = tree; shownFlat = flat; shownShape = sh;
+                shownCards = cards.ToDictionary(kv => kv.Key, kv => kv.Value.shape);
+                var ops = new Dictionary<string, object> { ["replace"] = replace };
+                if (changes.Count > 0) ops["nodes"] = changes.ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+                Host.Patch(this, ops);
+                return;
+            }
+            shownSkeleton = sk; shownCards = cards.ToDictionary(kv => kv.Key, kv => kv.Value.shape);
             if (shownShape != null && sh == shownShape)
             {
                 Updates++;
-                var changes = new Dictionary<string, Dictionary<string, object>>();
-                foreach (var kv in flat)
-                {
-                    var old = shownFlat[kv.Key];
-                    Dictionary<string, object> diff = null;
-                    foreach (var p in kv.Value)
-                        if (!old.TryGetValue(p.Key, out var ov) || Json.Write(ov) != Json.Write(p.Value)) (diff = diff ?? new Dictionary<string, object>())[p.Key] = p.Value;
-                    if (diff != null)
-                    {
-                        if (diff.ContainsKey("src") || diff.ContainsKey("color")) diff["type"] = kv.Value.TryGetValue("type", out var t) ? t : "box";
-                        changes[kv.Key] = diff;
-                    }
-                }
+                var changes = Diff(flat);
                 shownTree = tree; shownFlat = flat;
                 if (changes.Count > 0) Host.Update(this, changes);
                 return;
@@ -653,7 +790,126 @@ namespace TizenNotifier
             Host.Show(this, tree);
         }
 
-        public void ForceShow() { shownShape = null; Dirty(); }
+        public void ForceShow() { shownShape = null; shownSkeleton = null; Dirty(); }
+
+        private string shownSkeleton;
+        public const int SlideMs = 500;
+
+        private static string Containers(string skeleton) => Regex.Replace(skeleton ?? "", @"d\.[^;=]*=card;", "");
+
+        // Cards came or went and nothing else changed structure: remove the gone ones, add the new ones, replace those
+        // that changed inside, update the rest in place, all in one patch, so live video in the untouched cards keeps
+        // playing. With slide cards involved, the cards that stay glide to their new places and new ones fade in once
+        // they have (a delayed animation on the TV, nothing waits here). Returns false when containers changed too.
+        private bool Restructure(Dictionary<string, object> tree, Dictionary<string, Dictionary<string, object>> flat, string sh, string sk,
+            Dictionary<string, (Dictionary<string, object> node, string shape)> cards, Dictionary<string, (bool visible, string mode)> cond)
+        {
+            var added = cards.Keys.Where(k => !shownCards.ContainsKey(k)).ToList();
+            var removed = shownCards.Keys.Where(k => !cards.ContainsKey(k)).ToList();
+            if (added.Count + removed.Count == 0 || Containers(sk) != Containers(shownSkeleton)) return false;
+            string ModeOf(string name)
+            {
+                var key = name.Substring(2);
+                return cond.TryGetValue(key, out var a) ? a.mode : ShownCond != null && ShownCond.TryGetValue(key, out var b) ? b.mode : null;
+            }
+            bool slide = added.Concat(removed).Any(n => ModeOf(n) == "slide");
+
+            Patches++;
+            var replace = new Dictionary<string, object>();
+            foreach (var kv in cards) if (!added.Contains(kv.Key) && shownCards[kv.Key] != kv.Value.shape) replace[kv.Key] = kv.Value.node;
+            bool Inside(IEnumerable<string> roots, string name) => roots.Any(r => name == r || name.StartsWith(r + "."));
+            var changes = Diff(flat.Where(kv => !Inside(replace.Keys.Concat(added), kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value));
+            if (slide)
+                foreach (var c in changes.Values)
+                {
+                    var anims = new List<object>();
+                    foreach (var k in new[] { "x", "y" })
+                        if (c.TryGetValue(k, out var v)) { anims.Add(new Dictionary<string, object> { ["prop"] = k, ["to"] = v, ["ms"] = (double)SlideMs }); c.Remove(k); }
+                    if (anims.Count > 0) c["animate"] = anims;
+                }
+            var adds = new List<object>();
+            foreach (var name in added)
+            {
+                var (parent, index) = ParentOf(Json.O(tree, "root"), name);
+                if (parent == null) continue;
+                var node = cards[name].node;
+                if (ModeOf(name) == "slide")
+                {
+                    node = new Dictionary<string, object>(node) { ["opacity"] = 0.0 };   // a copy: what is shown keeps the plain node
+                    node["animate"] = new List<object> { new Dictionary<string, object> { ["prop"] = "opacity", ["from"] = 0.0, ["to"] = 1.0, ["ms"] = (double)FadeMs, ["delay"] = (double)SlideMs } };
+                }
+                adds.Add(new Dictionary<string, object> { ["parent"] = Json.S(parent, "name"), ["index"] = (double)index, ["node"] = node });
+            }
+            var ops = new Dictionary<string, object>();
+            if (removed.Count > 0) ops["remove"] = removed.Cast<object>().ToList();
+            if (replace.Count > 0) ops["replace"] = replace;
+            if (adds.Count > 0) ops["add"] = adds;
+            var nodes = changes.Where(kv => kv.Value.Count > 0).ToDictionary(kv => kv.Key, kv => (object)kv.Value);
+            if (nodes.Count > 0) ops["nodes"] = nodes;
+            shownTree = tree; shownFlat = flat; shownShape = sh; shownSkeleton = sk;
+            shownCards = cards.ToDictionary(kv => kv.Key, kv => kv.Value.shape);
+            Host.Patch(this, ops);
+            return true;
+        }
+
+        private static (Dictionary<string, object> parent, int index) ParentOf(Dictionary<string, object> n, string name)
+        {
+            var kids = Json.A(n, "children");
+            if (kids == null) return (null, -1);
+            for (int i = 0; i < kids.Count; i++)
+            {
+                if (!(kids[i] is Dictionary<string, object> k)) continue;
+                if (Json.S(k, "name") == name) return (n, i);
+                var r = ParentOf(k, name);
+                if (r.parent != null) return r;
+            }
+            return (null, -1);
+        }
+        private Dictionary<string, string> shownCards = new Dictionary<string, string>();
+        public int Patches;
+
+        // Changed properties of nodes that exist in what is shown.
+        private Dictionary<string, Dictionary<string, object>> Diff(Dictionary<string, Dictionary<string, object>> flat)
+        {
+            var changes = new Dictionary<string, Dictionary<string, object>>();
+            foreach (var kv in flat)
+            {
+                if (!shownFlat.TryGetValue(kv.Key, out var old)) continue;
+                Dictionary<string, object> diff = null;
+                foreach (var p in kv.Value)
+                    if (!old.TryGetValue(p.Key, out var ov) || Json.Write(ov) != Json.Write(p.Value)) (diff = diff ?? new Dictionary<string, object>())[p.Key] = p.Value;
+                if (diff != null)
+                {
+                    if (diff.ContainsKey("src") || diff.ContainsKey("color")) diff["type"] = kv.Value.TryGetValue("type", out var t) ? t : "box";
+                    changes[kv.Key] = diff;
+                }
+            }
+            return changes;
+        }
+
+        // A placed card's root is named after its place in the config (Layout.Finish).
+        private static readonly Regex CardName = new Regex(@"^d\.(s\d+\.c\d+|c\d+|badges)$");
+
+        // The tree's shape with every card collapsed to its name, plus each card's own shape.
+        private static void Skeleton(Dictionary<string, object> n, System.Text.StringBuilder sk, Dictionary<string, (Dictionary<string, object> node, string shape)> cards)
+        {
+            if (n == null) return;
+            var name = Json.S(n, "name") ?? "";
+            if (CardName.IsMatch(name))
+            {
+                var sb = new System.Text.StringBuilder();
+                Flatten(n, new Dictionary<string, Dictionary<string, object>>(), sb);
+                cards[name] = (n, sb.ToString());
+                sk.Append(name).Append("=card;");
+                return;
+            }
+            var one = new System.Text.StringBuilder();
+            var kids = Json.A(n, "children");
+            var bare = new Dictionary<string, object>(n); bare.Remove("children");
+            Flatten(bare, new Dictionary<string, Dictionary<string, object>>(), one);
+            sk.Append(one);
+            if (kids != null) foreach (var c in kids) Skeleton(c as Dictionary<string, object>, sk, cards);
+        }
 
         private static void Flatten(Dictionary<string, object> n, Dictionary<string, Dictionary<string, object>> flat, System.Text.StringBuilder shape)
         {
@@ -666,9 +922,9 @@ namespace TizenNotifier
             // images can be changed in place; a rounded or refreshing image is a wrapper, so its geometry is shape.
             bool wrapped = (Json.S(n, "type") == "image" && (Json.Has(n, "radius") || Json.Has(n, "refresh_ms"))) || Json.S(n, "type") == "mjpeg" || Json.S(n, "type") == "video";
             shape.Append(name).Append(':').Append(Json.S(n, "type")).Append(wrapped ? Json.Write(new[] { Json.Get(n, "x"), Json.Get(n, "y"), Json.Get(n, "w"), Json.Get(n, "h") }) : "")
-                 .Append(Json.Has(n, "refresh_ms") || Json.S(n, "type") == "mjpeg" || Json.S(n, "type") == "video" ? "r" + Json.S(n, "src") : "").Append(Json.Has(n, "animate") ? "a" : "").Append(Json.Has(n, "radius") ? "c" : "")
+                 .Append(Json.Has(n, "refresh_ms") || Json.S(n, "type") == "mjpeg" || Json.S(n, "type") == "video" ? "r" + Json.S(n, "src") : "").Append(Json.Has(n, "radius") ? "c" : "")
                  .Append(Json.Has(n, "gradient") ? "g" : "").Append(Json.Has(n, "markup") ? "m" : "")
-                 .Append('[').Append(string.Join(",", props.Keys.OrderBy(k => k, StringComparer.Ordinal))).Append("];");
+                 .Append('[').Append(string.Join(",", props.Keys.Where(k => k != "animate").OrderBy(k => k, StringComparer.Ordinal))).Append("];");   // a fade on one render isn't structure
             var kids = Json.A(n, "children");
             if (kids != null) foreach (var c in kids) Flatten(c as Dictionary<string, object>, flat, shape);
         }
@@ -681,8 +937,8 @@ namespace TizenNotifier
                 return new Dictionary<string, object>
                 {
                     ["id"] = Opt.Id, ["dashboard"] = Opt.Dashboard, ["view"] = ViewTitle ?? Opt.View, ["status"] = Status, ["connected"] = Ha.Connected,
-                    ["user"] = UserName, ["cards_drawn"] = (double)CardsDrawn, ["unsupported"] = Unsupported.Distinct().Cast<object>().ToList(), ["offscreen"] = Offscreen.Cast<object>().ToList(),
-                    ["error"] = LastError ?? Ha.LastError, ["entities"] = (double)entSet.Count, ["templates"] = (double)templates.Count, ["redraws"] = (double)Shows, ["updates"] = (double)Updates,
+                    ["user"] = UserName, ["cards_drawn"] = (double)CardsDrawn, ["unsupported"] = Unsupported.Distinct().Cast<object>().ToList(), ["offscreen"] = Offscreen.Cast<object>().ToList(), ["warnings"] = Warnings.Distinct().Cast<object>().ToList(),
+                    ["error"] = LastError ?? Ha.LastError, ["entities"] = (double)entSet.Count, ["templates"] = (double)templates.Count, ["redraws"] = (double)Shows, ["updates"] = (double)Updates, ["patches"] = (double)Patches,
                     ["last_render"] = LastRender == default(DateTime) ? null : LastRender.ToString("o"),
                 };
         }
@@ -692,7 +948,7 @@ namespace TizenNotifier
             disposed = true;
             Ha.OnConnected -= OnConnected;
             Ha.OnDisconnected -= OnDisconnected;
-            try { debounce?.Dispose(); minute?.Dispose(); } catch (Exception) { }
+            try { debounce?.Dispose(); minute?.Dispose(); pendingTimer?.Dispose(); } catch (Exception) { }
             lock (L)
             {
                 if (entSub >= 0) Ha.Unsubscribe(entSub);

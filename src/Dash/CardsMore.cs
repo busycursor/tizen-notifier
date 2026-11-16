@@ -109,12 +109,18 @@ namespace TizenNotifier
             return cals;
         }
 
-        private static string CalColor(Dictionary<string, object> cfg, CalEvent e)
+        // segEnd: where this piece of the event ends (a week row's bar), when it is drawn in pieces
+        private static string CalColor(Ctx c, Dictionary<string, object> cfg, CalEvent e, DateTime? segEnd = null)
         {
-            if (e.Color != null) return e.Color;
-            var ids = Cals(cfg).Select(x => x.Item1).ToList();
-            int i = Math.Max(0, ids.IndexOf(e.CalendarId));
-            return CalColors[i % CalColors.Length];
+            string col = e.Color;
+            if (col == null)
+            {
+                var ids = Cals(cfg).Select(x => x.Item1).ToList();
+                int i = Math.Max(0, ids.IndexOf(e.CalendarId));
+                col = c.P.Series[i % c.P.Series.Length];
+            }
+            // HA (FullCalendar) draws events, and pieces of events in past weeks, that have ended at half strength
+            return c.P.PastAlpha < 1 && (segEnd ?? e.End) <= c.S.NowLocal ? Theme.WithAlpha(col, c.P.PastAlpha) : col;
         }
 
         private static Dictionary<string, object> Month(Ctx c, Dictionary<string, object> cfg, double w, double h)
@@ -168,7 +174,7 @@ namespace TizenNotifier
                 {
                     var day = ws.AddDays(d);
                     double cx = gx + d * cw + cw / 2;
-                    if (day == today) { Ui.Add(card, Ui.Box(cx - 13, ry + 4, 26, 26, P.Accent, 13)); Ui.Add(card, Ui.Text(cx - 13, ry + 4, 26, 26, day.Day.ToString(), 13, "#ffffff", "medium", "center")); }
+                    if (day == today) Ui.Add(card, Ui.Add(Ui.Box(cx - 13, ry + 4, 26, 26, P.Accent, 13), Ui.Text(0, 0, 26, 26, day.Day.ToString(), 13, "#ffffff", "medium", "center")));
                     else Ui.Add(card, Ui.Text(cx - 20, ry + 4, 40, 26, day.Day.ToString(), 13, inRange(day) ? P.Text : P.Secondary, null, "center"));
                 }
                 var used = new List<bool[]>();
@@ -188,7 +194,7 @@ namespace TizenNotifier
                     for (int k = s0; k < s1; k++) used[lvl][k] = true;
                     if (lvl >= levels - 1) { for (int k = s0; k < s1; k++) hidden[k]++; continue; }
                     double bx = gx + s0 * cw + 2, bw = (s1 - s0) * cw - 4, by = ry + 32 + lvl * lh;
-                    var bar = Ui.Box(bx, by, bw, lh - 3, CalColor(cfg, e), 4);
+                    var bar = Ui.Box(bx, by, bw, lh - 3, CalColor(c, cfg, e, endEx < we ? endEx : we), 4);
                     Ui.Add(bar, Ui.Text(5, 0, bw - 10, lh - 3, e.Summary, 11, "#1b1b1b"));
                     Ui.Add(card, bar);
                 }
@@ -203,13 +209,13 @@ namespace TizenNotifier
                         used[lvl][d] = true;
                         if (lvl >= levels - 1) { hidden[d]++; continue; }
                         double x = gx + d * cw + 4, ty = ry + 32 + lvl * lh, tw = cw - 8;
-                        Ui.Add(card, Ui.Box(x + 2, ty + 7, 7, 7, CalColor(cfg, e), 4));
+                        Ui.Add(card, Ui.Box(x + 2, ty + 7, 7, 7, CalColor(c, cfg, e), 4));
                         string time = e.Start.ToString(e.Start.Minute == 0 ? "h tt" : "h:mm tt", CultureInfo.InvariantCulture);
                         var tn = Ui.Text(x + 14, ty, tw - 14, lh - 3, time + " <font weight='bold'>" + Esc(e.Summary) + "</font>", 11, P.Text);
                         tn["markup"] = true;
                         Ui.Add(card, tn);
                     }
-                    if (hidden[d] > 0) Ui.Add(card, Ui.Text(gx + d * cw + 4, ry + 32 + (levels - 1) * lh, cw - 8, lh - 3, "+" + hidden[d] + " more", 11, P.Secondary));
+                    if (hidden[d] > 0) Ui.Add(card, Ui.Text(gx + d * cw + 4, ry + Math.Min(32 + (levels - 1) * lh, ch - lh + 3), cw - 8, lh - 3, "+" + hidden[d] + " more", 11, P.Secondary));   // inside the cell when rows are short
                 }
             }
             return card;
@@ -265,6 +271,7 @@ namespace TizenNotifier
             double? target = Json.Get(e.Attr, hum ? "humidity" : "temperature") as double?;
             double? cur = Json.Get(e.Attr, hum ? "current_humidity" : "current_temperature") as double?;
             string col = Format.StateColor(e) ?? P.Inactive;
+            if (e.A("hvac_action") == "idle" && P.IdleAlpha < 1) col = Theme.WithAlpha(col, P.IdleAlpha);   // HA dims the ring while idle
             Ui.Add(card, Ui.Text(P.Pad, P.Pad, w - 2 * P.Pad, 24, Format.Name(e, Json.S(cfg, "name")), 16, P.Text, null, "center"));
             double s = Math.Min(w * 0.59, h - 2 * P.Pad - 28);
             double rx = (w - s) / 2, ry = P.Pad + 28;

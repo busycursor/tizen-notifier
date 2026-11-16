@@ -25,6 +25,14 @@ namespace TizenNotifier
 
         public string VideoUrl(string src, int widthPx) => Relay.Url(src, widthPx, 0, true);
 
+        public void Patch(DashSession s, Dictionary<string, object> ops)
+        {
+            var req = new Dictionary<string, object>(ops) { ["id"] = "dash:" + s.Opt.Id };
+            var (code, res) = Notes.Update(req);
+            if (code == 404) s.ForceShow();
+            else if (code != 200) TizenNotifier.Log.W("dash " + s.Opt.Id + ": patch failed: " + Json.S(res, "error"));
+        }
+
         public void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes)
         {
             var nodes = new Dictionary<string, object>();

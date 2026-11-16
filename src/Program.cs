@@ -62,7 +62,7 @@ namespace TizenNotifier
 
     internal static class Cfg
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
         public static string Token = "";
         public static int Port = 9123;
         public static List<string> Allow = new List<string>();

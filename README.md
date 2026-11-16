@@ -7,7 +7,8 @@ Frame TV's Art Mode. Video keeps playing, and the remote keeps controlling the a
 Messages can carry text, pictures, a live-ish camera view, GIFs, Lottie animations, gradients, progress bars, buttons and
 sound. Every look is defined in the request, so new layouts never need a new install.
 
-It can also show a **Home Assistant dashboard** as a live, read-only overlay (for example over Art Mode), and play
+It can also show a **Home Assistant dashboard** as a live, read-only overlay (for example over Art Mode), in one of
+three themes set from the dashboard itself (`default`, a faithful `lovelace`, and a quiet single-color `ambient`), and play
 **video with sound in a window or full screen without the TV's video decoder**, so the picture underneath keeps playing.
 Video goes through a small relay (`relay/`) that transcodes on another machine's GPU.
 
@@ -67,7 +68,7 @@ Copy `build.env.example` to `build.env` (ignored by git) and set at least `CERT_
 
 ```
 ./build.sh build   <tv>        # -> out/TizNotify1-<tv>.tpk: signed, with that TV's token baked in
-./build.sh install <tv> <ip>   # push device-profile.xml, tizen install, launch only if the install completed
+./build.sh install <tv> <ip>   # build, push device-profile.xml, tizen install, launch only if the install completed
 ```
 
 - `<tv>` is a name of your choosing (`living_room`). The first build of a TV creates its token at `TOKEN_FILE`; put the
@@ -205,6 +206,8 @@ Adding a TV: add its entry to the `tvs` maps and the `tv` selectors in the scrip
 | `cert-tools/make_distributor.js` | distributor certificate for N DUIDs, keeping the author certificate |
 | `relay/` | video relay: Dockerfile, compose file and server (ffmpeg, VA-API) |
 | `dash-host/`, `tools/preview.py` | render a dashboard on a desktop and draw it as a PNG (layout checks without a TV) |
+| `dash-tests/` | tests for the dashboard renderer (offline: `docker run --rm -v "$PWD":/w -w /w/dash-tests mcr.microsoft.com/dotnet/sdk:6.0 dotnet test`) |
+| `src/res/fonts/` | Inter and Roboto (static cuts) with their licenses, for dashboard themes and `"font"` on text nodes |
 | `docs/` | design notes |
 | `examples/` | the requests used in testing |
 | `testassets/` | test GIF, Lottie and sounds (generated for this project) |
@@ -216,6 +219,8 @@ The `examples/` requests use `homeassistant.local` and `camera.local` as placeho
 - [NLayer](https://github.com/naudio/NLayer) (MIT): MP3 decoding, bundled as a NuGet package.
 - [tizen.js](https://github.com/reisxd/tizen.js): Samsung certificate creation without Tizen Studio.
 - Tizen.NET / TizenFX (Apache-2.0): the platform libraries.
+- [Inter](https://github.com/rsms/inter) and [Roboto](https://github.com/googlefonts/roboto-classic) (SIL Open Font
+  License 1.1): fonts for dashboard themes, as static weight cuts of the variable fonts. Licenses in `src/res/fonts`.
 
 ## License
 

@@ -121,9 +121,9 @@ namespace TizenNotifier
                 p.Layers[i].ResourceReady += (s, e) => Ready(p, idx);
             }
             var stop = new Stopper();
-            n.Keep.Add(stop);
+            n.AddKeep(stop, c);
             string url = Json.S(spec, "src");
-            if (Relay.IsRelay(url)) n.Keep.Add(Relay.Register(n.Id, (double)w * h));
+            if (Relay.IsRelay(url)) n.AddKeep(Relay.Register(n.Id, (double)w * h), c);
             new Thread(() => Net(p, url, stop)) { IsBackground = true, Name = "mjpeg-net" }.Start();
             return c;
         }

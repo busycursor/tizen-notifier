@@ -1,0 +1,153 @@
+{
+ "config": {
+  "views": [
+   {
+    "title": "M",
+    "cards": [
+     {
+      "type": "entities",
+      "entities": [
+       "light.desk_lamp",
+       "light.hall",
+       "switch.fan"
+      ]
+     },
+     {
+      "type": "glance",
+      "entities": [
+       "sensor.outside_temp",
+       "sensor.power",
+       "binary_sensor.front_door"
+      ]
+     },
+     {
+      "type": "vertical-stack",
+      "cards": [
+       {
+        "type": "tile",
+        "entity": "light.desk_lamp"
+       },
+       {
+        "type": "tile",
+        "entity": "sensor.power"
+       }
+      ]
+     },
+     {
+      "type": "horizontal-stack",
+      "cards": [
+       {
+        "type": "button",
+        "entity": "light.hall"
+       },
+       {
+        "type": "button",
+        "entity": "switch.fan"
+       }
+      ]
+     },
+     {
+      "type": "markdown",
+      "content": "Line one\n\nLine two with more words in it to wrap around the card."
+     },
+     {
+      "type": "gauge",
+      "entity": "sensor.power",
+      "max": 2000
+     }
+    ]
+   }
+  ]
+ },
+ "states": [
+  {
+   "entity_id": "light.desk_lamp",
+   "state": "on",
+   "attributes": {
+    "friendly_name": "Desk Lamp",
+    "brightness": 180,
+    "color_mode": "brightness",
+    "supported_color_modes": [
+     "brightness"
+    ]
+   }
+  },
+  {
+   "entity_id": "light.hall",
+   "state": "off",
+   "attributes": {
+    "friendly_name": "Hall Light"
+   }
+  },
+  {
+   "entity_id": "sensor.outside_temp",
+   "state": "61.4",
+   "attributes": {
+    "friendly_name": "Outside",
+    "unit_of_measurement": "°F",
+    "device_class": "temperature"
+   }
+  },
+  {
+   "entity_id": "sensor.power",
+   "state": "412",
+   "attributes": {
+    "friendly_name": "Power",
+    "unit_of_measurement": "W",
+    "device_class": "power"
+   }
+  },
+  {
+   "entity_id": "binary_sensor.front_door",
+   "state": "off",
+   "attributes": {
+    "friendly_name": "Front Door",
+    "device_class": "door"
+   }
+  },
+  {
+   "entity_id": "climate.upstairs",
+   "state": "heat",
+   "attributes": {
+    "friendly_name": "Upstairs",
+    "current_temperature": 69,
+    "temperature": 71,
+    "hvac_action": "heating",
+    "hvac_modes": [
+     "off",
+     "heat"
+    ],
+    "min_temp": 45,
+    "max_temp": 95
+   }
+  },
+  {
+   "entity_id": "input_boolean.show_cam",
+   "state": "on",
+   "attributes": {
+    "friendly_name": "Show Camera"
+   }
+  },
+  {
+   "entity_id": "input_boolean.guest",
+   "state": "off",
+   "attributes": {
+    "friendly_name": "Guest Mode"
+   }
+  },
+  {
+   "entity_id": "camera.porch",
+   "state": "idle",
+   "attributes": {
+    "friendly_name": "Porch"
+   }
+  },
+  {
+   "entity_id": "switch.fan",
+   "state": "on",
+   "attributes": {
+    "friendly_name": "Fan"
+   }
+  }
+ ]
+}

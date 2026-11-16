@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Tizen Notifier: build and install.
 #   ./build.sh build   <tv>        -> out/TizNotify1-<tv>.tpk, signed, with that TV's token baked in
-#   ./build.sh install <tv> <ip>   -> install out/TizNotify1-<tv>.tpk on the TV; launch it only if the install completed
+#   ./build.sh install <tv> <ip>   -> build, then install out/TizNotify1-<tv>.tpk on the TV; launch it only if the install
+#                                     completed (it always builds first, so a stale package is never installed)
 # Settings: build.env next to this script (start from build.env.example). See "Build and install" in README.md.
 #
 # Sources and certificates are streamed into the containers on stdin (no bind mounts), so BUILD_DOCKER and
@@ -96,7 +97,8 @@ EOF
   install)
     ip=${3:-}
     [[ "$ip" =~ ^[A-Za-z0-9.:-]+$ ]] || usage
-    [ -s "$TPK" ] || { echo "no $TPK: run ./build.sh build $tv first" >&2; exit 1; }
+    "$HERE/build.sh" build "$tv" || { echo "build failed; nothing installed" >&2; exit 1; }
+    [ -s "$TPK" ] || { echo "no $TPK after the build" >&2; exit 1; }
     [ -s "$CERT_DIR/device-profile.xml" ] || { echo "no device-profile.xml in CERT_DIR" >&2; exit 1; }
     script=$(
       cat <<EOF

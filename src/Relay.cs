@@ -110,10 +110,11 @@ namespace TizenNotifier
         }
 
         // Before a message is built: decide which of its video nodes may play through the relay, and at what width.
-        // Streams of other messages count; the message's own earlier streams don't (it is being replaced).
+        // Streams of other messages count; the message's own earlier streams don't (it is being replaced), unless countOwn:
+        // a partial update (/update replace/add) keeps the rest of the message playing, so all registered streams count.
         // Over the count limit -> those nodes fall back. Several streams over the pixel budget -> the new ones are requested
         // smaller and scaled up into their boxes. One stream alone is never limited.
-        public static void Plan(Dictionary<string, object> root, string note, bool takeover, List<object> warn)
+        public static void Plan(Dictionary<string, object> root, string note, bool takeover, List<object> warn, bool countOwn = false)
         {
             if (takeover || root == null) return;
             var vids = new List<Dictionary<string, object>>();
@@ -126,7 +127,7 @@ namespace TizenNotifier
             Walk(root);
             if (vids.Count == 0) return;
             int others; double otherArea;
-            lock (Active) { others = Active.Count(a => a.note != note); otherArea = Active.Where(a => a.note != note).Sum(a => a.area); }
+            lock (Active) { others = Active.Count(a => countOwn || a.note != note); otherArea = Active.Where(a => countOwn || a.note != note).Sum(a => a.area); }
             int slots = Math.Max(0, Cfg.VideoMaxStreams - others);
             for (int i = slots; i < vids.Count; i++) vids[i]["__relay_deny"] = true;
             if (vids.Count > slots) warn.Add("video: " + (vids.Count - slots) + " stream(s) over this TV's limit of " + Cfg.VideoMaxStreams + "; using fallbacks");

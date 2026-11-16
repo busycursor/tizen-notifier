@@ -10,10 +10,13 @@ namespace TizenNotifier
     {
         public string CardBg = "#121216b8", Text = "#ffffff", Secondary = "#ffffffb0", Divider = "#ffffff26", Accent = "#03a9f4", Inactive = "#9e9e9e";
         public double Radius = 12, Pad = 12;
+        // calendar colors by calendar index, and how strongly events that have ended are drawn
+        public string[] Series = { "#44739e", "#984ea3", "#00d2d5", "#ff7f00", "#af8d00", "#7f80cd", "#b3e900", "#c42e60" };
+        public double PastAlpha = 1, IdleAlpha = 1;   // ended calendar events; a thermostat ring while idle
 
-        public static Palette From(Dictionary<string, object> t)
+        public static Palette From(Dictionary<string, object> t, Palette start = null)
         {
-            var p = new Palette();
+            var p = start ?? new Palette();
             p.CardBg = Json.S(t, "card_bg") ?? p.CardBg;
             p.Text = Json.S(t, "text") ?? p.Text;
             p.Secondary = Json.S(t, "secondary_text") ?? p.Secondary;
@@ -85,7 +88,11 @@ namespace TizenNotifier
         }
 
         // Rough text width for a proportional sans-serif (no font metrics outside NUI).
-        public static double Width(string s, double px, bool bold = false) => string.IsNullOrEmpty(s) ? 0 : s.Length * px * (bold ? 0.58 : 0.54);
+        public static double Width(string s, double px, bool bold = false) => string.IsNullOrEmpty(s) ? 0 : s.Length * px * (bold ? 0.58 : 0.54) * WidthFactor;
+
+        // Set per render from the theme (fonts differ in width). Per thread: two dashboards may render at once.
+        [ThreadStatic] private static double widthFactor;
+        public static double WidthFactor { get => widthFactor == 0 ? 1 : widthFactor; set => widthFactor = value; }
 
         // Greedy word wrap with the same estimate; returns line count (at least 1).
         public static int Lines(string s, double px, double w)

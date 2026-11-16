@@ -58,6 +58,8 @@ namespace TizenNotifier
         public bool Absolute, Stack, Closing;
         public readonly Dictionary<string, View> Named = new Dictionary<string, View>();
         public readonly List<object> Keep = new List<object>();     // animations, timers, players: rooted until closed
+        public readonly Dictionary<object, View> KeepOwner = new Dictionary<object, View>();   // the view each one belongs to
+        public void AddKeep(object k, View owner) { Keep.Add(k); if (owner != null) KeepOwner[k] = owner; }
         public readonly List<string> Files = new List<string>();
         public readonly List<(View v, string action, Dictionary<string, object> focus, Dictionary<string, object> saved)> Buttons = new List<(View, string, Dictionary<string, object>, Dictionary<string, object>)>();
         public int Sel;
@@ -102,21 +104,79 @@ namespace TizenNotifier
             return (200, new Dictionary<string, object> { ["ok"] = true, ["id"] = id, ["warnings"] = warn });
         }
 
+        // nodes:   {"<name>": {props}}                       change properties in place
+        // replace: {"<name>": <node>}                        swap a named subtree for a new one (same place, same parent)
+        // add:     [{"parent": "<name>", "index": n, "node": <node>}]
+        // remove:  ["<name>"]
+        // Only the replaced or removed subtrees' players, streams, timers and animations stop; the rest keeps running.
         public static (int, object) Update(object req)
         {
             string id = Json.S(req, "id");
             if (id == null) return (400, Http.Err("id missing"));
             var nodes = Json.O(req, "nodes");
+            var replace = Json.O(req, "replace");
+            var add = (Json.A(req, "add") ?? new List<object>()).OfType<Dictionary<string, object>>().ToList();
+            var remove = (Json.A(req, "remove") ?? new List<object>()).OfType<string>().ToList();
             var warn = new List<object>();
             var files = new List<string>();
             if (nodes != null) foreach (var kv in nodes)
                 if (kv.Value is Dictionary<string, object> sp && (Json.S(sp, "type") == "icon" || Json.S(sp, "type") == "graph" || Json.S(sp, "type") == "svg")) Media.SvgNode(sp, warn);
             if (nodes != null) foreach (var kv in nodes) if (kv.Value is Dictionary<string, object> p && p.ContainsKey("src")) {
                 try { p["src"] = Media.Resolve(Json.S(p, "src"), files, Json.S(p, "type") == "video"); } catch (Exception e) { warn.Add(kv.Key + ": " + e.Message); p.Remove("src"); } }
+
+            bool structural = (replace != null && replace.Count > 0) || add.Count > 0 || remove.Count > 0;
+            bool takeover = false;
+            if (structural)
+            {
+                // 1. stop what the outgoing subtrees run, so their streams no longer count against the limits (the streams
+                //    that stay do count: Plan with countOwn)
+                var outgoing = (replace?.Keys ?? Enumerable.Empty<string>()).Concat(remove).ToList();
+                var t = App.OnMain(() =>
+                {
+                    if (!All.TryGetValue(id, out var n) || n.Closing) return (bool?)null;
+                    foreach (var name in outgoing) if (n.Named.TryGetValue(name, out var ov)) StopSubtree(n, ov);
+                    return Json.B(n.Req, "takeover", false);
+                });
+                if (t == null) { Media.Delete(files); return (404, Http.Err("no active note " + id)); }
+                takeover = t.Value;
+                // 2. the incoming subtrees: stream limits and media, as for a new message
+                var incoming = (replace?.Values.OfType<Dictionary<string, object>>() ?? Enumerable.Empty<Dictionary<string, object>>())
+                    .Concat(add.Select(a => Json.O(a, "node")).Where(x => x != null)).ToList();
+                // all incoming subtrees share what is left of the limits, next to the streams that keep playing
+                Relay.Plan(new Dictionary<string, object> { ["type"] = "box", ["children"] = incoming.Cast<object>().ToList() }, id, takeover, warn, countOwn: true);
+                foreach (var sub in incoming)
+                    try { Media.Prepare(sub, files, warn, takeover); } catch (Exception e) { warn.Add(e.Message); }
+            }
+
             bool found = App.OnMain(() =>
             {
                 if (!All.TryGetValue(id, out var n) || n.Closing) return false;
                 n.Files.AddRange(files);
+                if (replace != null)
+                    foreach (var kv in replace)
+                    {
+                        if (!n.Named.TryGetValue(kv.Key, out var old)) { warn.Add("no node named " + kv.Key); continue; }
+                        if (!(old.GetParent() is View parent) || !(kv.Value is Dictionary<string, object> spec)) continue;
+                        int order = old.SiblingOrder;
+                        var nv = Build.Node(n, spec, (int)parent.SizeWidth, (int)parent.SizeHeight, false, warn);
+                        parent.Add(nv);
+                        try { nv.SiblingOrder = order; } catch (Exception e) { warn.Add("order: " + e.Message); }   // where the old one was
+                        RemoveSubtree(n, old);
+                    }
+                foreach (var a in add)
+                {
+                    string pn = Json.S(a, "parent");
+                    if (pn == null || !n.Named.TryGetValue(pn, out var parent)) { warn.Add("no parent named " + pn); continue; }
+                    var spec = Json.O(a, "node");
+                    if (spec == null) continue;
+                    int index = (int)Json.N(a, "index", -1);
+                    View before = index >= 0 && index < (int)parent.ChildCount ? parent.GetChildAt((uint)index) : null;
+                    var nv = Build.Node(n, spec, (int)parent.SizeWidth, (int)parent.SizeHeight, false, warn);
+                    parent.Add(nv);
+                    if (before != null) try { nv.SiblingOrder = before.SiblingOrder; } catch (Exception e) { warn.Add("order: " + e.Message); }
+                }
+                foreach (var name in remove)
+                    if (n.Named.TryGetValue(name, out var old)) { StopSubtree(n, old); RemoveSubtree(n, old); }
                 if (nodes != null)
                     foreach (var kv in nodes)
                     {
@@ -128,6 +188,29 @@ namespace TizenNotifier
             });
             if (!found) { Media.Delete(files); return (404, Http.Err("no active note " + id)); }
             return (200, new Dictionary<string, object> { ["ok"] = true, ["id"] = id, ["warnings"] = warn });
+        }
+
+        private static bool Within(View v, View root)
+        {
+            for (var p = v; p != null; p = p.GetParent() as View) if (p == root) return true;
+            return false;
+        }
+
+        // Stop the players, streams, timers and animations that belong to `root` or anything inside it.
+        private static void StopSubtree(Note n, View root)
+        {
+            foreach (var k in n.Keep.ToList())
+                if (n.KeepOwner.TryGetValue(k, out var owner) && Within(owner, root)) { StopKeep(k); n.Keep.Remove(k); n.KeepOwner.Remove(k); }
+        }
+
+        // Take a subtree out: its names (unless a new node took them over) and its views.
+        private static void RemoveSubtree(Note n, View root)
+        {
+            foreach (var kv in n.Named.ToList()) if (Within(kv.Value, root)) n.Named.Remove(kv.Key);
+            n.Buttons.RemoveAll(b => Within(b.v, root));
+            if (n.Sel >= n.Buttons.Count) n.Sel = 0;
+            try { root.GetParent()?.Remove(root); } catch (Exception) { }
+            root.Dispose();
         }
 
         public static (int, object) Dismiss(object req)
@@ -190,7 +273,7 @@ namespace TizenNotifier
             {
                 // replace content in place
                 foreach (var k in n.Keep) StopKeep(k);
-                n.Keep.Clear(); n.Named.Clear(); n.Buttons.Clear(); n.Sel = 0;
+                n.Keep.Clear(); n.KeepOwner.Clear(); n.Named.Clear(); n.Buttons.Clear(); n.Sel = 0;
                 if (n.Root != null) { n.Win.Remove(n.Root); n.Root.Dispose(); n.Root = null; }
                 Media.Delete(n.Files); n.Files.Clear();
                 try { n.Win.Resize(w, h); } catch (Exception e) { warn.Add("resize: " + e.Message); }
@@ -338,7 +421,7 @@ namespace TizenNotifier
                 if (type == "slide") { anim.AnimateTo(v, "PositionX", dx, ease); anim.AnimateTo(v, "PositionY", dy, ease); }
                 if (type == "scale") anim.AnimateTo(v, "Scale", new Vector3(0.8f, 0.8f, 1f), ease);
             }
-            n.Keep.Add(anim);
+            n.AddKeep(anim, v);
             if (done != null) anim.Finished += (s, e) => done();
             anim.Play();
         }

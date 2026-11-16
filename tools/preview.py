@@ -19,7 +19,33 @@ FONTS = ["/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helve
          "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
 
 
-def font(px, bold=False):
+# families the dashboard themes name: the app's bundled static cuts (src/res/fonts), else out/fonts
+FAMILIES = {"inter": "Inter", "roboto": "Roboto"}
+CUTS = {"light": "Light", "thin": "Light", "medium": "Medium", "semibold": "Medium", "demibold": "Medium", "bold": "Bold"}
+_HERE = __import__("os").path.dirname(__import__("os").path.abspath(__file__))
+
+
+def family_file(name, weight=None):
+    import os
+    base = FAMILIES.get(str(name).lower())
+    if not base:
+        return None
+    cut = CUTS.get(str(weight or "").lower(), "Regular")
+    for p in (os.path.join(_HERE, "..", "src", "res", "fonts", base + "-" + cut + ".ttf"),
+              os.path.join(_HERE, "..", "src", "res", "fonts", base + "-Regular.ttf"),
+              os.path.join(_HERE, "..", "out", "fonts", base + ".ttf")):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def font(px, bold=False, family=None, weight=None):
+    ff = family_file(family, weight or ("bold" if bold else None)) if family else None
+    if ff:
+        try:
+            return ImageFont.truetype(ff, max(1, int(px)))
+        except Exception:  # noqa: BLE001
+            pass
     for f in FONTS:
         try:
             return ImageFont.truetype(f, max(1, int(px)), index=1 if bold and f.endswith(".ttc") else 0)
@@ -119,7 +145,7 @@ def draw_node(canvas, n, ox, oy, pw, ph, fetch):
             d.line([x + i, y, x + i, y + h - 1], fill=tuple(int(c1[k] + (c2[k] - c1[k]) * f) for k in range(4)))
     if t == "text":
         px = n.get("pixel_size") or n.get("size", 20) * 1.33
-        f = font(px, n.get("bold") or n.get("weight") in ("bold", "medium", "semiBold", "demiBold"))
+        f = font(px, n.get("bold") or n.get("weight") in ("bold", "medium", "semiBold", "demiBold"), n.get("font"), n.get("weight"))
         col = color(n.get("color"), (0, 0, 0, 255))
         txt = str(n.get("text", ""))
         if n.get("markup"):   # the TV renders markup; the preview just drops the tags

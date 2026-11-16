@@ -45,7 +45,7 @@ namespace TizenNotifier
                     case "text": v = new TextLabel(); break;
                     case "image": v = new ImageView(); break;
                     case "gif": v = MakeGif(); break;
-                    case "lottie": v = MakeLottie(); n.Keep.Add(v); break;   // stopped before the note is torn down (Notes.StopKeep)
+                    case "lottie": v = MakeLottie(); n.AddKeep(v, v); break;   // stopped before the note is torn down (Notes.StopKeep)
                     case "video":
                         // VideoView takes the TV's video plane: the playing app goes black and does not recover (Frame, Tizen 6.0, 2026-11-14)
                         if (!Json.B(n.Req, "takeover", false)) { warn.Add("video node skipped: it blanks the app underneath; send \"takeover\": true to allow it"); v = new View(); spec = new Dictionary<string, object>(spec); spec.Remove("src"); spec["type"] = "box"; type = "box"; break; }
@@ -219,6 +219,16 @@ namespace TizenNotifier
                 case "ellipsis": t.Ellipsis = Bool(val); return;
                 case "markup": t.EnableMarkup = Bool(val); return;
                 case "line_spacing": t.LineSpacing = F(val); return;
+                case "outline":
+                {
+                    // {"color": "#000000", "width": 2}: an outline around every glyph (TV px)
+                    var ol = val as Dictionary<string, object>;
+                    var pm = new PropertyMap();
+                    pm.Add("color", new PropertyValue(Col(Json.Get(ol, "color") ?? "#000000")));
+                    pm.Add("width", new PropertyValue((float)Json.N(ol, "width", 2)));
+                    try { t.Outline = pm; } catch (Exception e) { warn.Add("outline: " + e.Message); }
+                    return;
+                }
                 case "text_shadow":
 #if TIZEN5
                     warn.Add("text_shadow not supported on Tizen 5"); return;
@@ -258,7 +268,7 @@ namespace TizenNotifier
             if (ms <= 0) return;
             var anim = new Animation((int)ms);
             anim.AnimateTo(fill, "SizeWidth", reverse ? (float)w : 0f, new AlphaFunction(AlphaFunction.BuiltinFunctions.Linear));
-            n.Keep.Add(anim);
+            n.AddKeep(anim, v);
             anim.Play();
         }
 
@@ -291,7 +301,7 @@ namespace TizenNotifier
             var loop = Json.Get(a, "loop");
             if (loop is bool lb && lb) anim.Looping = true;
             else if (loop is double ld && ld > 1) anim.LoopCount = (int)ld;
-            n.Keep.Add(anim);
+            n.AddKeep(anim, v);
             anim.Play();
         }
 
@@ -424,12 +434,14 @@ namespace TizenNotifier
             string url = Json.S(spec, "__refresh_url");
             int ms = Math.Max(200, (int)Json.N(spec, "refresh_ms", 500));
             int fails = 0;
+            var stop = new Stop();
+            n.AddKeep(stop, c);   // replaced or removed with its subtree (or the note's content): the loop ends
             System.Threading.Tasks.Task.Run(async () =>
             {
-                while (!n.Closing)
+                while (!n.Closing && !stop.Stopped)
                 {
                     await System.Threading.Tasks.Task.Delay(ms);
-                    if (n.Closing) break;
+                    if (n.Closing || stop.Stopped) break;
                     string f;
                     try { f = Media.FetchFile(url); fails = 0; }
                     catch (Exception e) { if (fails++ == 0) Log.W("refresh fetch failed: " + e.Message); continue; }
@@ -476,6 +488,9 @@ namespace TizenNotifier
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetGif(View v, string src) { var g = (AnimatedImageView)v; g.ResourceUrl = src; g.Play(); }
         [MethodImpl(MethodImplOptions.NoInlining)] private static void SetLottie(View v, string src, int loop) { var l = (LottieAnimationView)v; l.URL = src; l.LoopCount = loop; l.Play(); }
 #endif
+        // ends a background loop that belongs to a view (Notes.StopKeep disposes it)
+        internal sealed class Stop : IDisposable { public volatile bool Stopped; public void Dispose() => Stopped = true; }
+
         // A Lottie view still playing when its window is disposed killed the app on Tizen 6.0 (2026-11-15):
         // stop it and take it off the tree first.
         [MethodImpl(MethodImplOptions.NoInlining)]

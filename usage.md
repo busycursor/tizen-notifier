@@ -218,6 +218,7 @@ Colors **inside text markup** follow different rules (section 5).
 | `line_spacing` | number | extra space between lines |
 | `markup` | bool | enable inline markup |
 | `text_shadow` | object | `{"color": "#000000", "x": 2, "y": 2, "blur": 2}` (defaults). T6 only. |
+| `outline` | object | `{"color": "#000000", "width": 2}`: an outline around every glyph, TV px (app 1.2.0+). |
 
 Wrapping text: set `w`, `"multiline": true`, and either no `h` (grows) or an `h` with `"ellipsis": true` (cut off).
 
@@ -552,8 +553,18 @@ Examples:
   (adds new animations) and `call`.
 - **Include `"type"` when changing `src`**: `{"cam": {"type": "image", "src": "..."}}`. Without it the change is
   ignored with `src ignored on`. Same for a `progress` bar's `color`: `{"bar": {"type": "progress", "color": "#ff0000"}}`.
-- Not changeable: `children`, `layout`, `action`, `focus`. If a button's `focus` sets a key (e.g. `bg`), updating that
-  key on the button is undone the next time the selection moves. To change structure, send `/notify` again with the same `id`.
+- Not changeable in place: `children`, `layout`, `action`, `focus`. If a button's `focus` sets a key (e.g. `bg`),
+  updating that key on the button is undone the next time the selection moves.
+- **Structure, without redrawing the rest** (app 1.2.0+): swap, add or remove named subtrees. Only the swapped or
+  removed parts stop their players, streams, timers and animations; live video elsewhere in the message keeps playing.
+  ```json
+  {"id": "dash:main",
+   "replace": {"d.s0.c1": {"type": "box", "name": "d.s0.c1", "x": 0, "y": 0, "w": 400, "h": 120, "children": [...]}},
+   "add": [{"parent": "d", "index": 3, "node": {"type": "box", "name": "d.c4", "...": "..."}}],
+   "remove": ["d.c2"]}
+  ```
+  A replaced subtree takes the old one's place among its siblings. New subtrees go through the same media handling and
+  video limits as `/notify`. To change everything, send `/notify` again with the same `id`.
 - A `radius` image: its `name` refers to the clip box. `src` updates still reach the picture. Don't update `src` of a
   `refresh_ms` image.
 - `duration` restarts the timer from now (`0` = no timer).
@@ -667,9 +678,102 @@ and keeps it live. Built with `HA_URL` and `HA_TOKEN_FILE` (a **non-admin** user
 - Camera cards play live through the relay (go2rtc's RTSP stream when the card names one, else Home Assistant's own
   stream for the entity) and fall back to snapshots.
 - Read-only: taps do nothing and action-only cards are dropped. Unsupported cards are listed in `GET /dashboard`.
-- Options: `view` (index or path), `x`/`y`/`w`/`h` (region), `scale`, `theme` (`card_bg`, `text`, `secondary_text`,
-  `accent`, `radius`, `card_opacity`), `persist` (default true: comes back after an app restart).
-- Camera cards that name a go2rtc stream play live through the relay; without it, refreshing snapshots.
+- Request options: `view` (index or path), `persist` (default true: comes back after an app restart), plus any of the
+  settings below. A request only overrides the settings it actually contains.
+
+### 13.1 Settings in the dashboard: `tv_overlay`
+
+Everything about how a dashboard looks on the TV can live in the dashboard itself, so editing it in Home Assistant
+changes the TV live, with no rebuild. Put a `tv_overlay` key at the top level of the dashboard's config (raw
+configuration editor); a view may carry its own `tv_overlay` to override it; a card may carry
+`tv_overlay: {conditional: <mode>}`.
+
+```yaml
+tv_overlay:
+  theme: ambient            # default | lovelace | ambient
+  scale: 2.33               # x, y, w, h, scale, opacity (whole overlay, 0..1), as_user, conditionals
+  conditionals: reserve     # instant | reserve | crossfade | slide
+  ambient:                  # parameters of a theme, under its name
+    origin: bottom-left
+views:
+  - title: Evening
+    tv_overlay: {ambient: {origin: top-right}}
+    sections: [...]
+```
+
+- **Precedence**, lowest first: the theme's defaults, the dashboard's `tv_overlay`, the shown view's `tv_overlay`, the
+  `/dashboard` request. Nested objects merge key by key. The request's `theme` object still works:
+  `{"theme": {"name": "lovelace", "card_opacity": 0.8}}` picks the theme and sets its parameters.
+- Bad values are listed under `warnings` in `GET /dashboard` and ignored, never fatal.
+- Home Assistant keeps the key through raw-editor saves (checked on all three levels). The visual editor was not
+  checked; if a visual edit drops a key, put it back in the raw editor.
+- Palette parameters work in every theme: `card_bg`, `text`, `secondary_text`, `accent`, `radius`, `card_opacity`.
+
+### 13.2 Themes
+
+- **`default`**: translucent cards, the TV's system font, the frontend's layout.
+- **`lovelace`**: Home Assistant's own dark theme: opaque `#1c1c1c` cards, `#e1e1e1` / `#9b9b9b` text, Roboto, HA's
+  current calendar colors (ended events at half strength), idle thermostat rings dimmed. Same layout as `default`.
+  Parameter `background` (default `false`): `true` draws HA's `#111111` view background behind the cards.
+- **`ambient`**: a quiet theme for sitting over art. The view's structure is ignored: every card, in config order
+  (badges first, then section cards by section, then view cards), flows in fixed-width columns from a corner. Each
+  column fills from the corner's edge toward the opposite one, then the next column steps sideways away from the
+  corner. Strictly in order: a card that doesn't fit the rest of a column starts the next one, and earlier columns are
+  never backfilled. A card taller than the screen gets its own column and is clipped; cards past the last column are
+  listed as offscreen. Every color becomes one foreground color at the original color's lightness (CIE L*); all text is
+  drawn at one opacity, at least `min_weight`, with an outline and a shadow; text on a filled shape (event bars, the
+  today circle) takes `knockout_color`; card-colored surfaces become tiles. Photos, camera views and video are never
+  recolored. Put conditional cards **last** in the view: a hidden card at the end gives its space back, one in the
+  middle leaves a gap (`reserve`).
+
+The defaults were set on a Frame over Art Mode in the evening, when the panel is dim: the smallest card text comes out
+at 28 px on the 1080 layer (`scale` 2.33), on a light frosted tile, in white with a thin outline and a soft shadow.
+
+| ambient parameter | default | meaning |
+|---|---|---|
+| `origin` | `bottom-left` | `top-left`, `top-right`, `bottom-left`, `bottom-right` |
+| `color` | `#ffffff` | the one foreground color |
+| `tile_color` | `#ffffff` | tile background color |
+| `tile_opacity` | `0.18` | tile background opacity |
+| `column_width` | `340` | column width (CSS px, before `scale`) |
+| `gap` | `8` | between tiles and between columns |
+| `margin` | `24` | from the screen edges |
+| `radius` | `14` | tile corners |
+| `font` | `Inter` | family for every text |
+| `min_value` | `0.7` | how faint the darkest color gets (0..1) |
+| `recolor` | `alpha` | `alpha` (foreground at a share of opacity) or `ramp` (mixed from the tile color) |
+| `text_opacity` | `1` | opacity of all text |
+| `min_weight` | `medium` | `light`, `regular`, `medium`, `bold`: lighter text is drawn at this weight |
+| `outline` | `1` | text outline width in TV px (0 = none) |
+| `outline_color` | `#00000099` | |
+| `shadow` | `4` | text shadow blur in TV px (0 = none) |
+| `shadow_color` | `#000000b3` | |
+| `shadow_x`, `shadow_y` | `2`, `2` | shadow offset in TV px |
+| `knockout_color` | `#000000` | text on filled shapes |
+| `fill_opacity` | `0.45` | translucent fills (a graph's shaded area) are at least this opaque |
+
+ambient's default `scale` is 2.33 (default and lovelace: 1.0).
+
+Text nodes accept `outline` (`{"color": "#00000099", "width": 1}`, TV px; app 1.2.0+) as well as `text_shadow`.
+
+Fonts: Inter and Roboto ship with the app (static Light/Regular/Medium/Bold cuts, SIL Open Font License 1.1, in
+`src/res/fonts`). Any text node can use them with `"font": "Inter"` or `"font": "Roboto"`.
+
+### 13.3 Conditional cards
+
+How a card with `visibility` rules, or a `conditional` card, comes and goes. The mode is set by `conditionals`
+(dashboard, view, request) or per card with `tv_overlay: {conditional: <mode>}`. Default: `instant` for `default` and
+`lovelace`, `reserve` for `ambient`.
+
+- `instant`: hidden cards take no space; the layout redraws when one changes.
+- `reserve`: a hidden card keeps its place as an empty slot, so nothing else moves. It is measured without contacting
+  anything (a hidden camera card asks for no stream). A hidden card after the last shown one gives its space back.
+  Cards fade out (400 ms) before they go and fade in when they come back.
+- `crossfade`: hidden cards take no space; when one changes, the whole overlay fades out (300 ms) and back in.
+- `slide`: hidden cards take no space; a card fades out, the others glide to their new places (500 ms), and a card
+  that comes back fades in once they have moved.
+
+Only the cards that changed are redrawn (`/update` `replace`), so live cameras in other cards keep playing.
 
 ## 14. Tizen 5 differences
 

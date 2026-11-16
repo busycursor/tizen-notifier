@@ -47,6 +47,21 @@ namespace TizenNotifier
             return cfg;
         }
 
+        // The card a conditional/visibility card would draw if its conditions held (for measuring a reserved slot).
+        public static Dictionary<string, object> IgnoringConditions(Ctx c, Dictionary<string, object> cfg)
+        {
+            if (T(cfg) == "conditional")
+            {
+                var inner = Json.O(cfg, "card");
+                if (inner == null) return null;
+                inner = new Dictionary<string, object>(inner);
+                inner.Remove("visibility");
+                if (!Json.Has(inner, "grid_options") && Json.Has(cfg, "grid_options")) inner["grid_options"] = cfg["grid_options"];
+                return IgnoringConditions(c, inner);
+            }
+            return Effective(c, cfg);
+        }
+
         // Size in a sections grid: columns of 12, rows (0 = by content). grid_options, then legacy layout_options, then type defaults.
         public static (int cols, int rows) Grid(Ctx c, Dictionary<string, object> outer, Dictionary<string, object> cfg)
         {
@@ -690,7 +705,6 @@ namespace TizenNotifier
             return byDay;
         }
 
-        private static readonly string[] CalColors = { "#44739e", "#984ea3", "#00d2d5", "#ff7f00", "#af8d00", "#7f80cd", "#b3e900", "#c42e60" };
 
         private static Dictionary<string, object> Calendar(Ctx c, Dictionary<string, object> cfg, double w, double h)
         {
@@ -709,7 +723,7 @@ namespace TizenNotifier
                 foreach (var e in kv.Value)
                 {
                     int ci = Math.Max(0, calIds.FindIndex(id => Format.Name(c.S.State(id), null) == e.Calendar));
-                    string col = e.Color ?? CalColors[ci % CalColors.Length];
+                    string col = e.Color ?? P.Series[ci % P.Series.Length];
                     Ui.Add(card, Ui.Box(P.Pad + 6, y + 9, 10, 10, col, 5));
                     string time = e.AllDay ? "All day" : e.Start.ToString("h:mm", CultureInfo.InvariantCulture) + e.Start.ToString("tt", CultureInfo.InvariantCulture).ToLowerInvariant().Substring(0, 1);
                     Ui.Add(card, Ui.Text(P.Pad + 24, y, 64, 28, time, 13, P.Secondary));
@@ -931,6 +945,7 @@ namespace TizenNotifier
         // (the card then shows snapshots). The TV applies its video limits and falls back to `snap` on its own.
         private static Dictionary<string, object> LiveCamera(Ctx c, string entity, string go2rtcStream, string go2rtcHost, double w, double h, string snap)
         {
+            if (c.S.Measuring) return null;                              // a hidden card being measured asks for nothing
             if (c.S.Host.VideoUrl("probe", 160) == null) return null;   // relay not available right now
             string src = go2rtcStream != null && go2rtcHost != null ? "rtsp://" + go2rtcHost + ":8554/" + go2rtcStream : c.S.CameraStream(entity);
             if (src == null) return null;

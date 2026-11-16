@@ -15,10 +15,17 @@ namespace TizenNotifier
 
         public static Dictionary<string, object> Render(DashSession s, Dictionary<string, object> view)
         {
-            var o = s.Opt;
+            var o = s.Eff = Settings.Resolve(s.Opt, s.Config, view, s.Warnings);
             double scale = o.Scale, W = o.W / scale, H = o.H / scale;
             var ctx = new Ctx(s, W);
+            Ui.WidthFactor = ctx.T.WidthFactor;
             var root = Ui.Box(0, 0, W, H);
+            if (ctx.T.Name == "lovelace" && Json.B(ctx.T.Params, "background", false)) Ui.Add(root, Ui.Box(0, 0, W, H, "#111111"));
+            if (ctx.T.Layout == "flow")
+            {
+                Flow.Place(ctx, root, Flow.Collect(ctx, view), W, H);
+                return Finished(s, ctx, root, scale);
+            }
             string type = Json.S(view, "type") ?? (Json.Has(view, "sections") ? "sections" : Json.B(view, "panel", false) ? "panel" : "masonry");
             double top = 24;   // the badge row sits 24 px from the top; sections follow below it
             var badges = Json.A(view, "badges");
@@ -44,15 +51,26 @@ namespace TizenNotifier
                 default: Masonry(ctx, root, view, W, top); break;
             }
             foreach (var k in Json.A(root, "children") ?? new List<object>()) Offscreen(s, k as Dictionary<string, object>, 0, 0, W, H);
-            Finish(root, scale, "d");
+            return Finished(s, ctx, root, scale);
+        }
+
+        private static Dictionary<string, object> Finished(DashSession s, Ctx ctx, Dictionary<string, object> root, double scale)
+        {
+            var o = s.Eff;
+            s.LastCond = ctx.Cond;
+            Appearing(root, s.ShownCond, ctx.Cond);
+            Finish(root, scale, "d", ctx.T.Font);
+            if (o.Opacity < 1) root["opacity"] = o.Opacity;
             return new Dictionary<string, object>
             {
-                ["id"] = "dash:" + o.Id, ["duration"] = 0.0, ["x"] = o.X, ["y"] = o.Y, ["w"] = o.W, ["h"] = o.H, ["stack"] = false,
+                ["id"] = "dash:" + s.Opt.Id, ["duration"] = 0.0, ["x"] = o.X, ["y"] = o.Y, ["w"] = o.W, ["h"] = o.H, ["stack"] = false,
                 ["level"] = "base", ["enter"] = new Dictionary<string, object> { ["type"] = "fade", ["ms"] = 300.0 }, ["root"] = root,
             };
         }
 
         // ---------- badges ----------
+        public static double BadgeBlock(Ctx c, Dictionary<string, object> root, List<object> badges, double W, double top) => BadgeRow(c, root, badges, W, top);
+
         private static double BadgeRow(Ctx c, Dictionary<string, object> root, List<object> badges, double W, double top)
         {
             var built = new List<Dictionary<string, object>>();
@@ -88,23 +106,24 @@ namespace TizenNotifier
         // ---------- sections ----------
         private static void Sections(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double top)
         {
-            var secs = (Json.A(view, "sections") ?? new List<object>()).OfType<Dictionary<string, object>>().Where(c.Visible).ToList();
+            var all = Json.A(view, "sections") ?? new List<object>();
+            var secs = Enumerable.Range(0, all.Count).Where(i => all[i] is Dictionary<string, object> d && c.Visible(d)).Select(i => (sec: (Dictionary<string, object>)all[i], si: i)).ToList();
             if (secs.Count == 0) return;
             int maxCols = (int)Json.N(view, "max_columns", 4);
             int span(Dictionary<string, object> sec) => Math.Max(1, (int)Json.N(sec, "column_span", 1));
             int fit = (int)Math.Floor((W - 2 * Pad + SecGap) / (ColMin + SecGap));
-            int cols = Math.Max(1, Math.Min(Math.Min(maxCols, fit), secs.Sum(span)));
+            int cols = Math.Max(1, Math.Min(Math.Min(maxCols, fit), secs.Sum(x => span(x.sec))));
             double colW = Math.Min(ColMax, (W - 2 * Pad - SecGap * (cols - 1)) / cols);
             double total = cols * colW + (cols - 1) * SecGap, left = (W - total) / 2;
             bool dense = Json.B(view, "dense_section_placement", false);
 
             // rows of the outer grid: each has a per-column "used" flag; row height = tallest section in it
             var rows = new List<(bool[] used, double h, List<(Dictionary<string, object> node, int col)> items)>();
-            foreach (var sec in secs)
+            foreach (var (sec, si) in secs)
             {
                 int sp = Math.Min(span(sec), cols);
                 double sw = sp * colW + (sp - 1) * SecGap;
-                var node = Section(c, sec, sw, sp);
+                var node = Section(c, sec, si, sw, sp);
                 if (node == null) continue;
                 double sh = (double)node["h"];
                 int ri = -1, ci = -1;
@@ -133,23 +152,33 @@ namespace TizenNotifier
         // One section: a grid of 12 columns per view column it spans (a 3-wide section has 36). Rows are 56 px at least; a
         // card sized by its content occupies one row that grows to fit it (the frontend's minmax(56px, auto) rows), and a
         // card with a row count spans that many rows. Returns a transparent box holding the cards, or null when empty.
-        private static Dictionary<string, object> Section(Ctx c, Dictionary<string, object> sec, double sw, int span)
+        private static Dictionary<string, object> Section(Ctx c, Dictionary<string, object> sec, int si, double sw, int span)
         {
-            var cards = (Json.A(sec, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().ToList();
+            var raw = Json.A(sec, "cards") ?? new List<object>();
             int G = 12 * Math.Max(1, span);
             double cell = (sw - (G - 1) * Gap) / G;
-            var occ = new List<bool[]>();
-            var placed = new List<(Dictionary<string, object> eff, int r, int k, int cols, int rows, double natural)>();
-            foreach (var cfg in cards)
+            // what to place: drawn cards and reserved slots; slots after the last drawn card give their space back
+            var todo = new List<(string key, Dictionary<string, object> cfg, Dictionary<string, object> eff, bool slot)>();
+            for (int ci = 0; ci < raw.Count; ci++)
             {
-                if (!c.Visible(cfg)) continue;
-                var eff = Cards.Effective(c, cfg);
-                if (eff == null) continue;
+                if (!(raw[ci] is Dictionary<string, object> cfg)) continue;
+                string key = "s" + si + ".c" + ci;
+                var (draw, slot) = c.Decide(key, cfg);
+                if (!draw && !slot) continue;
+                var eff = slot ? c.Measure(() => Cards.IgnoringConditions(c, cfg)) : Cards.Effective(c, cfg);
+                if (eff != null) todo.Add((key, cfg, eff, slot));
+            }
+            int lastDrawn = todo.FindLastIndex(t => !t.slot);
+            var occ = new List<bool[]>();
+            var placed = new List<(Dictionary<string, object> eff, int r, int k, int cols, int rows, double natural, string key, bool slot)>();
+            for (int ti = 0; ti <= lastDrawn; ti++)
+            {
+                var (key, cfg, eff, isSlot) = todo[ti];
                 var (gc, gr) = Cards.Grid(c, cfg, eff);
                 gc = gc <= 0 ? G : Math.Max(1, Math.Min(G, gc));
                 double w = gc * cell + (gc - 1) * Gap;
                 int rowsN = gr > 0 ? gr : 1;
-                double natural = gr > 0 ? 0 : Cards.Height(c, eff, w);
+                double natural = gr > 0 ? 0 : isSlot ? c.Measure(() => Cards.Height(c, eff, w)) : Cards.Height(c, eff, w);
                 int pr = 0, pc = 0;
                 for (int r = 0; ; r++)
                 {
@@ -164,7 +193,7 @@ namespace TizenNotifier
                     if (found >= 0) { pr = r; pc = found; break; }
                 }
                 for (int rr = pr; rr < pr + rowsN; rr++) for (int kk = pc; kk < pc + gc; kk++) occ[rr][kk] = true;
-                placed.Add((eff, pr, pc, gc, rowsN, natural));
+                placed.Add((eff, pr, pc, gc, rowsN, natural, key, isSlot));
             }
             if (placed.Count == 0) return null;
             int nRows = placed.Max(p => p.r + p.rows);
@@ -178,9 +207,10 @@ namespace TizenNotifier
             {
                 double w = p.cols * cell + (p.cols - 1) * Gap;
                 double h = p.natural > 0 ? p.natural : Enumerable.Range(p.r, p.rows).Sum(r => rowH[r]) + (p.rows - 1) * Gap;
-                var node = Cards.Draw(c, p.eff, w, h);
+                var node = p.slot ? Ui.Box(0, 0, w, h) : Cards.Draw(c, p.eff, w, h);
                 if (node == null) continue;
                 node["x"] = p.k * (cell + Gap); node["y"] = rowY[p.r];
+                node["_card"] = p.key;
                 Ui.Add(box, node);
                 bottom = Math.Max(bottom, rowY[p.r] + h);
             }
@@ -192,20 +222,29 @@ namespace TizenNotifier
         // ---------- masonry / panel ----------
         private static void Masonry(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double top)
         {
-            var cards = (Json.A(view, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().ToList();
+            var raw = Json.A(view, "cards") ?? new List<object>();
             int n = Math.Max(1, Math.Min((int)Json.N(view, "max_columns", 4), (int)Math.Floor(W / 500)));
             double colW = Math.Min(492, (W - 2 * Pad - Gap * (n - 1)) / n);
             double left = (W - (n * colW + (n - 1) * Gap)) / 2;
             var heights = new double[n];
             var sizes = new double[n];
-            foreach (var cfg in cards)
+            var todo = new List<(string key, Dictionary<string, object> eff, bool slot)>();
+            for (int ci = 0; ci < raw.Count; ci++)
             {
-                if (!c.Visible(cfg)) continue;
-                var eff = Cards.Effective(c, cfg);
-                if (eff == null) continue;
-                double h = Cards.Height(c, eff, colW);
-                var node = Cards.Draw(c, eff, colW, h);
+                if (!(raw[ci] is Dictionary<string, object> cfg)) continue;
+                var (draw, slot) = c.Decide("c" + ci, cfg);
+                if (!draw && !slot) continue;
+                var e = slot ? c.Measure(() => Cards.IgnoringConditions(c, cfg)) : Cards.Effective(c, cfg);
+                if (e != null) todo.Add(("c" + ci, e, slot));
+            }
+            int lastDrawn = todo.FindLastIndex(t => !t.slot);
+            for (int ti = 0; ti <= lastDrawn; ti++)
+            {
+                var (key, eff, isSlot) = todo[ti];
+                double h = isSlot ? c.Measure(() => Cards.Height(c, eff, colW)) : Cards.Height(c, eff, colW);
+                var node = isSlot ? Ui.Box(0, 0, colW, h) : Cards.Draw(c, eff, colW, h);
                 if (node == null) continue;
+                node["_card"] = key;
                 // the frontend: the first column whose size is under 5 units, else the smallest (size ~ 50 px per unit;
                 // picture cards count 3 like the frontend's own estimate)
                 string ct = Cards.T(eff);
@@ -222,12 +261,13 @@ namespace TizenNotifier
         private static void Panel(Ctx c, Dictionary<string, object> root, Dictionary<string, object> view, double W, double H, double top)
         {
             var cfg = (Json.A(view, "cards") ?? new List<object>()).OfType<Dictionary<string, object>>().FirstOrDefault();
-            if (cfg == null || !c.Visible(cfg)) return;
+            if (cfg == null || !c.Decide("c0", cfg).draw) return;
             var eff = Cards.Effective(c, cfg);
             if (eff == null) return;
             var node = Cards.Draw(c, eff, W - 2 * Pad, H - top - Pad);
             if (node == null) return;
             node["x"] = Pad; node["y"] = top;
+            node["_card"] = "c0";
             Ui.Add(root, node);
         }
 
@@ -242,15 +282,32 @@ namespace TizenNotifier
             else s.Offscreen.Add((y >= H ? "below the screen" : "cut off at the bottom") + " at y=" + Math.Round(y) + " (" + Math.Round(h) + " tall)");
         }
 
+        // A conditional card shown now that was hidden in what is on screen fades in (reserve and slide; instant just appears,
+        // crossfade fades the whole overlay).
+        private static void Appearing(Dictionary<string, object> n, Dictionary<string, (bool visible, string mode)> shown, Dictionary<string, (bool visible, string mode)> now)
+        {
+            if (shown == null) return;
+            if (n.TryGetValue("_card", out var k) && k is string key && now.TryGetValue(key, out var cur) && cur.visible
+                && (cur.mode == "reserve" || cur.mode == "slide") && (!shown.TryGetValue(key, out var was) || !was.visible))
+            {
+                n["animate"] = new List<object> { new Dictionary<string, object> { ["prop"] = "opacity", ["from"] = 0.0, ["to"] = 1.0, ["ms"] = 400.0 } };
+                return;
+            }
+            if (Json.A(n, "children") is List<object> kids) foreach (var c in kids) if (c is Dictionary<string, object> cd) Appearing(cd, shown, now);
+        }
+
         // ---------- finish: CSS px -> TV px, stable names ----------
         private static readonly string[] Scaled = { "x", "y", "w", "h", "radius", "pixel_size", "gap", "line_spacing" };
 
-        private static void Finish(Dictionary<string, object> n, double scale, string name)
+        private static void Finish(Dictionary<string, object> n, double scale, string name, string font)
         {
+            // a placed card is named by its place in the config, so its name survives cards around it appearing
+            if (n.TryGetValue("_card", out var key)) { name = "d." + key; n.Remove("_card"); }
             n["name"] = name;
+            if (font != null && Json.S(n, "type") == "text") n["font"] = font;
             foreach (var k in Scaled) if (n.TryGetValue(k, out var v) && v is double d) n[k] = Math.Round(d * scale);
             if (Json.Get(n, "children") is List<object> kids)
-                for (int i = 0; i < kids.Count; i++) if (kids[i] is Dictionary<string, object> kd) Finish(kd, scale, name + "." + i);
+                for (int i = 0; i < kids.Count; i++) if (kids[i] is Dictionary<string, object> kd) Finish(kd, scale, name + "." + i, font);
         }
     }
 
@@ -258,10 +315,48 @@ namespace TizenNotifier
     internal sealed class Ctx
     {
         public readonly DashSession S;
-        public readonly Palette P;
+        public readonly DashTheme T;
+        public Palette P => T.P;
         public readonly double ViewW;
-        public Ctx(DashSession s, double viewW) { S = s; ViewW = viewW; P = Palette.From(s.Opt.Theme); }
+        public readonly Dictionary<string, string> SvgCache = new Dictionary<string, string>();   // recolored SVGs, this render
+        public Ctx(DashSession s, double viewW) { S = s; ViewW = viewW; T = DashTheme.From(s.Eff); }
         public bool Visible(Dictionary<string, object> cfg) => Conditions.All(S, Json.Get(cfg, "visibility"), ViewW);
+
+        // ---- conditional cards (visibility rules or the conditional card) ----
+        // what each one did this render, by card key: shown or not, and its mode (instant | reserve | crossfade | slide)
+        public readonly Dictionary<string, (bool visible, string mode)> Cond = new Dictionary<string, (bool, string)>();
+        public static bool HasConditions(Dictionary<string, object> cfg) => Json.Has(cfg, "visibility") || Cards.T(cfg) == "conditional";
+        public string CondMode(Dictionary<string, object> cfg)
+        {
+            var m = Json.S(Json.O(cfg, Settings.Key), "conditional");
+            if (m != null && !Settings.CondModes.Contains(m)) { S.Warnings.Add(Settings.Key + ".conditional: unknown mode '" + m + "'"); m = null; }
+            return m ?? S.Eff.Conditionals;
+        }
+        public bool CondVisible(Dictionary<string, object> cfg)
+        {
+            if (!Visible(cfg)) return false;
+            if (Cards.T(cfg) != "conditional") return true;
+            var inner = Json.O(cfg, "card");
+            return Conditions.All(S, Json.Get(cfg, "conditions"), ViewW) && (inner == null || Visible(inner));
+        }
+
+        // A card's decision for this render: (draw it, keep an empty slot for it, or neither). Records it in Cond.
+        public (bool draw, bool slot) Decide(string key, Dictionary<string, object> cfg)
+        {
+            if (!HasConditions(cfg)) return (true, false);
+            string mode = CondMode(cfg);
+            bool vis = CondVisible(cfg);
+            Cond[key] = (vis, mode);
+            return (vis, !vis && mode == "reserve");
+        }
+
+        // Size of a hidden card without asking HA or the relay for anything (data getters return what is cached).
+        public T Measure<T>(Func<T> f)
+        {
+            S.Measuring = true;
+            try { return f(); }
+            finally { S.Measuring = false; }
+        }
         public Ent E(Dictionary<string, object> cfg) => S.State(Json.S(cfg, "entity"));
         public void Unsupported(string what) { S.Unsupported.Add(what); }
     }
