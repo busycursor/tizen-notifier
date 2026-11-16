@@ -103,5 +103,20 @@ namespace TizenNotifier
             Assert.Equal(0, Json.A(DashSession.EmptyIfMissing(new System.InvalidOperationException("config_not_found: No config found.")), "views").Count);
             Assert.Throws<System.InvalidOperationException>(() => DashSession.EmptyIfMissing(new System.InvalidOperationException("unauthorized: no")));
         }
+
+        [Fact]
+        public void ShowAgainIsAFreshDrawing()
+        {
+            var (s, host) = Session("fixture-conditional", Ambient);
+            host.MutateOnShow = true;
+            s.PublishForTest(Render(s));
+            Assert.Contains(Nodes(host.LastShow), n => Json.S(n, "src") == "file:///tmp/used");
+            int shows = host.ShowCalls;
+            s.SetVisible(false);
+            s.SetVisible(true);
+            Assert.Equal(shows + 1, host.ShowCalls);
+            Assert.Contains(host.LastShowSrcs, x => x.Contains("camera_proxy"));
+            Assert.DoesNotContain(host.LastShowSrcs, x => x == "file:///tmp/used");   // a fresh drawing, not the used one
+        }
     }
 }

@@ -133,7 +133,7 @@ namespace TizenNotifier
             }
         }
 
-        // One background loop for all sessions: about once a second while any of them follows Art Mode.
+        // One background loop for all sessions: four times a second while any of them follows Art Mode.
         private static void Watch()
         {
             lock (L)
@@ -143,7 +143,7 @@ namespace TizenNotifier
                 {
                     while (true)
                     {
-                        Thread.Sleep(1000);
+                        Thread.Sleep(250);   // a quarter second: the dashboard must be gone before a show fades in
                         List<DashSession> follow;
                         lock (L) follow = Sessions.Values.Where(WantsArt).ToList();
                         if (follow.Count == 0) continue;

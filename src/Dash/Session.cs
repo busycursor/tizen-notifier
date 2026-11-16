@@ -671,7 +671,7 @@ namespace TizenNotifier
                     // first draw: give templates / history / lists that were just requested a moment to arrive, so the
                     // overlay appears once instead of drawing and immediately redrawing
                     bool waiting = templates.Values.Any(t => t.value == null && t.sub != -2) || history.Values.Any(h => h.busy) || todos.Values.Any(t => t.busy) || calendars.Values.Any(c => c.busy);
-                    if (shownShape == null && waiting && (DateTime.UtcNow - loadedAt).TotalSeconds < 2.5) { if (!disposed) try { debounce.Change(300, Timeout.Infinite); } catch (ObjectDisposedException) { } return; }
+                    if (shownShape == null && waiting && (DateTime.UtcNow - loadedAt).TotalSeconds < 2.5 && debounce != null) { if (!disposed) try { debounce.Change(300, Timeout.Infinite); } catch (ObjectDisposedException) { } return; }
                     DropUnusedTemplates();
                     LastRender = DateTime.UtcNow;
                 }
@@ -703,7 +703,6 @@ namespace TizenNotifier
         // and the new one in. Otherwise the tree goes out at once.
         private void Publish(Dictionary<string, object> tree)
         {
-            latestTree = tree; latestCond = LastCond;
             if (Hidden) return;   // off screen (Art Mode ended): keep rendering, draw nothing
             try { PublishCore(tree); }
             catch (Exception e) { Lost(e); }
@@ -711,8 +710,6 @@ namespace TizenNotifier
 
         // ---- visibility (Art Mode) ----
         public bool Hidden { get; private set; }
-        private Dictionary<string, object> latestTree;
-        private Dictionary<string, (bool visible, string mode)> latestCond;
 
         // Hide: close the message (cameras stop), drop pending transitions, forget what was shown. Show: draw the latest
         // tree in full. Calls that don't change anything do nothing.
@@ -732,9 +729,9 @@ namespace TizenNotifier
                 }
                 Hidden = false;
                 Host.Log("dash " + Opt.Id + ": shown");
-                if (latestTree == null) { Dirty(); return; }
-                try { PublishNow(latestTree, latestCond ?? new Dictionary<string, (bool, string)>(), false); }
-                catch (Exception e) { Lost(e); }
+                // a fresh drawing from current data, now: a tree already handed to the host has been rewritten by it
+                // (picture addresses become local files) and can't be shown again
+                Render();
             }
         }
 

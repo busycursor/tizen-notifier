@@ -18,7 +18,14 @@ namespace TizenNotifier
         public Dictionary<string, object> LastShow;
         public List<Dictionary<string, Dictionary<string, object>>> UpdatesSent = new List<Dictionary<string, Dictionary<string, object>>>();
         public void Log(string msg) { lock (Logs) Logs.Add(msg); }
-        public void Show(DashSession s, Dictionary<string, object> tree) { ShowCalls++; LastShow = tree; }
+        public bool MutateOnShow;   // like the notifier: it rewrites picture addresses in the tree it is given
+        public List<string> LastShowSrcs = new List<string>();   // picture addresses as handed over, before any rewrite
+        public void Show(DashSession s, Dictionary<string, object> tree)
+        {
+            ShowCalls++; LastShow = tree;
+            LastShowSrcs = Fixtures.Nodes(tree).Select(n => Json.S(n, "src")).Where(x => x != null).ToList();
+            if (MutateOnShow) foreach (var n in Fixtures.Nodes(tree)) if (Json.S(n, "src") is string src && !src.StartsWith("data:")) n["src"] = "file:///tmp/used";
+        }
         public void Update(DashSession s, Dictionary<string, Dictionary<string, object>> changes) { UpdateCalls++; UpdatesSent.Add(changes); }
         public string VideoUrl(string src, int widthPx) { VideoUrlCalls++; return null; }
     }
