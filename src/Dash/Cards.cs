@@ -124,12 +124,7 @@ namespace TizenNotifier
                     int rows = Math.Max(1, (int)Math.Ceiling(n / (double)cols));
                     return 2 * P.Pad + (Json.S(cfg, "title") != null ? 40 : 0) + rows * 76;
                 }
-                case "markdown":
-                {
-                    double h = 32 + (Json.S(cfg, "title") != null ? 48 : 0);
-                    foreach (var b in Markdown(c, cfg)) h += Ui.Lines(Plain(b.text), b.px, w - 32) * b.px * 1.5 + b.after;
-                    return h;
-                }
+                case "markdown": return MarkdownLayout(c, cfg, w).h;
                 case "heading": return Json.S(cfg, "heading_style") == "subtitle" ? 32 : 40;
                 case "todo-list":
                 {
@@ -541,7 +536,7 @@ namespace TizenNotifier
 
         // ---- markdown ----
         private static readonly Regex Tags = new Regex("<[^>]+>"), Bold = new Regex(@"(\*\*|__)(.+?)\1"), Ital = new Regex(@"(?<![\w*])([*_])(?!\s)(.+?)(?<!\s)\1(?![\w*])"),
-            Link = new Regex(@"\[([^\]]*)\]\([^)]*\)"), Code = new Regex("`([^`]*)`");
+            Link = new Regex(@"\[([^\]]*)\]\([^)]*\)"), Code = new Regex("`([^`]*)`"), BrTag = new Regex(@"<br\s*/?>", RegexOptions.IgnoreCase);
 
         // inline Markdown -> TV text markup (bold, italic); everything else plain. Text is escaped first.
         private static string Inline(string s)
@@ -561,8 +556,9 @@ namespace TizenNotifier
             string text = c.S.Template(src, new Dictionary<string, object> { ["config"] = cfg }) ?? "";
             var blocks = new List<(string, double, string, bool, double)>();
             var para = new List<string>();
-            void FlushPara() { if (para.Count > 0) { blocks.Add((string.Join(" ", para), 14, null, false, 14)); para.Clear(); } }
-            foreach (var raw in text.Replace("\r", "").Split('\n'))
+            // like HA's markdown card: a single newline and <br> both break the line
+            void FlushPara() { if (para.Count > 0) { blocks.Add((string.Join("\n", para), 14, null, false, 14)); para.Clear(); } }
+            foreach (var raw in BrTag.Replace(text.Replace("\r", ""), "\n").Split('\n'))
             {
                 string line = Inline(Code.Replace(Link.Replace(Tags.Replace(raw, ""), "$1"), "$1").Replace("&nbsp;", " ").Replace("&amp;", "&").Replace("&lt;", "<").Replace("&gt;", ">"));
                 string t = line.Trim();
@@ -585,22 +581,37 @@ namespace TizenNotifier
             return blocks;
         }
 
+        // Where each block goes: the card's padding all round, lines at the height the TV's font needs (Ui.Text's 1.35),
+        // paragraph spacing only between blocks. Shared by the height and the drawing so they agree.
+        private const double MdLine = 1.35;
+        private static (double h, double pad, double titleY, List<(string text, double px, string weight, bool secondary, double y, double h)> blocks) MarkdownLayout(Ctx c, Dictionary<string, object> cfg, double w)
+        {
+            double pad = c.P.Pad, y = pad, titleY = -1;
+            if (Json.S(cfg, "title") != null) { titleY = y; y += 22 * MdLine + 8; }
+            var md = Markdown(c, cfg);
+            var outl = new List<(string, double, string, bool, double, double)>();
+            for (int i = 0; i < md.Count; i++)
+            {
+                var b = md[i];
+                double bh = b.text.Length > 0 ? Ui.Lines(Plain(b.text), b.px, w - 2 * pad) * b.px * MdLine : b.px;
+                outl.Add((b.text, b.px, b.weight, b.secondary, y, bh));
+                y += bh + (i < md.Count - 1 ? b.after : 0);
+            }
+            return (y + pad, pad, titleY, outl);
+        }
+
         private static Dictionary<string, object> MarkdownCard(Ctx c, Dictionary<string, object> cfg, double w, double h)
         {
             var P = c.P;
             var card = Json.Has(cfg, "text_only") && Json.B(cfg, "text_only", false) ? Ui.Box(0, 0, w, h) : Card(c, w, h);
-            double y = 16;
-            if (Json.S(cfg, "title") is string mt) { Ui.Add(card, Ui.Text(16, 16, w - 32, 32, mt, 22, P.Text)); y += 48; }
-            foreach (var b in Markdown(c, cfg))
+            var L = MarkdownLayout(c, cfg, w);
+            if (Json.S(cfg, "title") is string mt) Ui.Add(card, Ui.Text(L.pad, L.titleY, w - 2 * L.pad, 22 * MdLine, mt, 22, P.Text, null, "left", "top"));
+            foreach (var b in L.blocks)
             {
-                double bh = Ui.Lines(Plain(b.text), b.px, w - 32) * b.px * 1.5;
-                if (b.text.Length > 0)
-                {
-                    var tn = Ui.Text(16, y, w - 32, bh, b.text, b.px, b.secondary ? P.Secondary : P.Text, b.weight, "left", "top", true);
-                    if (b.text.Contains("<")) tn["markup"] = true;
-                    Ui.Add(card, tn);
-                }
-                y += bh + b.after;
+                if (b.text.Length == 0) continue;
+                var tn = Ui.Text(L.pad, b.y, w - 2 * L.pad, b.h, b.text, b.px, b.secondary ? P.Secondary : P.Text, b.weight, "left", "top", true);
+                if (b.text.Contains("<")) tn["markup"] = true;
+                Ui.Add(card, tn);
             }
             return card;
         }
