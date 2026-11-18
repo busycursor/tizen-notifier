@@ -700,7 +700,7 @@ configuration editor); a view may carry its own `tv_overlay` to override it; a c
 tv_overlay:
   theme: ambient            # default | lovelace | ambient | fullscreen
   scale: 2.33               # x, y, w, h, scale, opacity (whole overlay, 0..1), as_user, conditionals
-  conditionals: reserve     # instant | reserve | crossfade | slide
+  conditionals: slide       # instant | reserve | crossfade | slide
   ambient:                  # parameters of a theme, under its name
     origin: bottom-left
 views:
@@ -734,8 +734,8 @@ views:
   listed as offscreen. Every color becomes one foreground color at the original color's lightness (CIE L*); all text is
   drawn at one opacity, at least `min_weight`, with an outline and a shadow; text on a filled shape (event bars, the
   today circle) takes `knockout_color`; card-colored surfaces become tiles. Photos, camera views and video are never
-  recolored. Put conditional cards **last** in the view: a hidden card at the end gives its space back, one in the
-  middle leaves a gap (`reserve`).
+  recolored. Put conditional cards **last** in the view, so the cards above them never move; hidden ones take no space and
+  the shown ones slide together (`slide`).
 
 The defaults were set on a Frame over Art Mode in the evening, when the panel is dim: the smallest card text comes out
 at 28 px on the 1080 layer (`scale` 2.33), on a light frosted tile, in white with a thin outline and a soft shadow.
@@ -774,7 +774,7 @@ Fonts: Inter and Roboto ship with the app (static Light/Regular/Medium/Bold cuts
 
 How a card with `visibility` rules, or a `conditional` card, comes and goes. The mode is set by `conditionals`
 (dashboard, view, request) or per card with `tv_overlay: {conditional: <mode>}`. Default: `instant` for `default` and
-`lovelace`, `reserve` for `ambient`.
+`lovelace`, `slide` for `ambient`.
 
 - `instant`: hidden cards take no space; the layout redraws when one changes.
 - `reserve`: a hidden card keeps its place as an empty slot, so nothing else moves. It is measured without contacting

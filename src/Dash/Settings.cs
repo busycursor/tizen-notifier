@@ -44,7 +44,7 @@ namespace TizenNotifier
             },
         };
         private static readonly Dictionary<string, double> ThemeScale = new Dictionary<string, double> { ["ambient"] = 2.33 };
-        private static readonly Dictionary<string, string> ThemeConditionals = new Dictionary<string, string> { ["ambient"] = "reserve" };
+        private static readonly Dictionary<string, string> ThemeConditionals = new Dictionary<string, string> { ["ambient"] = "slide" };
         private static readonly Dictionary<string, string[]> Choices = new Dictionary<string, string[]>
         {
             ["origin"] = new[] { "top-left", "top-right", "bottom-left", "bottom-right" },

@@ -9,6 +9,7 @@ namespace TizenNotifier
     public class ConditionalTests
     {
         private static readonly Dictionary<string, object> Ambient = P("scale", 1, "theme", P("name", "ambient"));
+        private static readonly Dictionary<string, object> Reserve = P("scale", 1, "theme", P("name", "ambient"), "conditionals", "reserve");
 
         private static Dictionary<string, Dictionary<string, object>> Cards(Dictionary<string, object> tree) =>
             (Json.A(Json.O(tree, "root"), "children") ?? new List<object>()).Cast<Dictionary<string, object>>().Where(n => Json.S(n, "name") != null).ToDictionary(n => Json.S(n, "name"));
@@ -24,7 +25,7 @@ namespace TizenNotifier
         [Fact]
         public void ReserveKeepsPositions()
         {
-            var (s, _) = Session("fixture-conditional", Ambient);
+            var (s, _) = Session("fixture-conditional", Reserve);
             var on = Cards(Shown(s));
             SetState(s, "input_boolean.show_cam", "off");
             var off = Cards(Shown(s));
@@ -43,7 +44,7 @@ namespace TizenNotifier
         [Fact]
         public void ReserveContactsNothing()
         {
-            var (s, host) = Session("fixture-conditional", Ambient);
+            var (s, host) = Session("fixture-conditional", Reserve);
             SetState(s, "input_boolean.show_cam", "off");
             Shown(s);
             Assert.Equal(0, host.VideoUrlCalls);
@@ -59,7 +60,7 @@ namespace TizenNotifier
             var cards = Json.A((Dictionary<string, object>)Json.A((Dictionary<string, object>)Json.A(cfg, "views")[0], "sections")[0], "cards");
             cards.Add(P("type", "conditional", "conditions", new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "on") },
                 "card", P("type", "tile", "entity", "switch.fan")));
-            var (s, _) = Session("fixture-conditional", Ambient, cfg);
+            var (s, _) = Session("fixture-conditional", Reserve, cfg);
             var c = Cards(Shown(s));
             Assert.True(c.ContainsKey("d.s0.c2"));    // hidden in the middle: reserved
             Assert.False(c.ContainsKey("d.s0.c6"));   // hidden at the end: nothing
@@ -71,7 +72,7 @@ namespace TizenNotifier
             var hide = new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "on") };
             var cfg = P("views", new List<object> { P("title", "H", "type", "sections", "sections", new List<object> { P("type", "grid", "cards", new List<object> {
                 P("type", "tile", "entity", "light.hall", "visibility", hide), P("type", "tile", "entity", "switch.fan", "visibility", hide) }) }) });
-            var (s, _) = Session("fixture-conditional", Ambient, cfg);
+            var (s, _) = Session("fixture-conditional", Reserve, cfg);
             var tree = Shown(s);
             Assert.Empty(Cards(tree));
         }
@@ -88,12 +89,34 @@ namespace TizenNotifier
         }
 
         [Fact]
+        public void AmbientSlidesByDefault()
+        {
+            // conditional cards last: a hidden one ahead of a shown one leaves no gap, the fixed card stays put
+            var cfg = P("views", new List<object> { P("title", "S", "type", "sections", "sections", new List<object> { P("type", "grid", "cards", new List<object> {
+                P("type", "tile", "entity", "light.hall"),
+                P("type", "tile", "entity", "switch.fan", "visibility", new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "on") }),
+                P("type", "tile", "entity", "switch.fan", "visibility", new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "off") }) }) }) });
+            var (s, _) = Session("fixture-conditional", Ambient, cfg);
+            SetState(s, "input_boolean.guest", "off");
+            var c = Cards(Shown(s));
+            Assert.False(c.ContainsKey("d.s0.c1"));
+            double y0 = Json.N(c["d.s0.c0"], "y", -1), h2 = Json.N(c["d.s0.c2"], "h", -1), y2 = Json.N(c["d.s0.c2"], "y", -1);
+            Assert.Equal(y0 - 8 - h2, y2);   // directly above the fixed card (bottom-left origin, gap 8)
+            var fixedY = y0;
+            SetState(s, "input_boolean.guest", "on");
+            c = Cards(Shown(s));
+            Assert.True(c.ContainsKey("d.s0.c1"));
+            Assert.False(c.ContainsKey("d.s0.c2"));
+            Assert.Equal(fixedY, Json.N(c["d.s0.c0"], "y", -2));
+        }
+
+        [Fact]
         public void CardOverride()
         {
             var cfg = (Dictionary<string, object>)Json.Parse(Json.Write(Json.O(Raw("fixture-conditional"), "config")));
             var cam = (Dictionary<string, object>)Json.A((Dictionary<string, object>)Json.A((Dictionary<string, object>)Json.A(cfg, "views")[0], "sections")[0], "cards")[1];
             cam["tv_overlay"] = P("conditional", "instant");
-            var (s, _) = Session("fixture-conditional", Ambient, cfg);
+            var (s, _) = Session("fixture-conditional", Reserve, cfg);
             SetState(s, "input_boolean.show_cam", "off");
             var c = Cards(Shown(s));
             Assert.False(c.ContainsKey("d.s0.c1"));   // instant: collapses
@@ -122,7 +145,7 @@ namespace TizenNotifier
         [Fact]
         public void FadeOutBeforeHide()
         {
-            var (s, host) = Session("fixture-conditional", Ambient);
+            var (s, host) = Session("fixture-conditional", Reserve);
             s.PublishForTest(Render(s));
             int shows = host.ShowCalls;
             SetState(s, "input_boolean.show_cam", "off");
@@ -249,7 +272,7 @@ namespace TizenNotifier
             var cards = Json.A((Dictionary<string, object>)Json.A((Dictionary<string, object>)Json.A(cfg, "views")[0], "sections")[0], "cards");
             cards.Add(P("type", "conditional", "conditions", new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "on") },
                 "card", P("type", "tile", "entity", "switch.fan")));
-            var (s, host) = Session("fixture-conditional", Ambient, cfg);
+            var (s, host) = Session("fixture-conditional", Reserve, cfg);
             s.PublishForTest(Render(s));
             int shows = host.ShowCalls;
             SetState(s, "input_boolean.guest", "on");   // the trailing card (and the reserved c2) come in
@@ -292,7 +315,7 @@ namespace TizenNotifier
                 P("type", "tile", "entity", "light.hall"),
                 P("type", "markdown", "content", "{{ states('sensor.power') }}", "visibility", new List<object> { P("condition", "state", "entity", "input_boolean.guest", "state", "off") }),
                 P("type", "tile", "entity", "switch.fan") }) }) });
-            var (s, _) = Session("fixture-conditional", Ambient, cfg);
+            var (s, _) = Session("fixture-conditional", Reserve, cfg);
             Render(s);
             s.SetTemplateValueForTest("{{ states('sensor.power') }}", "one\n\ntwo\n\nthree\n\nfour");
             Render(s); s.DropUnusedTemplates();

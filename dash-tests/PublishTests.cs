@@ -22,7 +22,7 @@ namespace TizenNotifier
         public void PatchWhenOneCardChanges()
         {
             // ambient, reserve: the guest card's slot fills in; nothing else moves
-            var (s, host) = Session("fixture-conditional", P("scale", 1, "theme", P("name", "ambient")));
+            var (s, host) = Session("fixture-conditional", P("scale", 1, "theme", P("name", "ambient"), "conditionals", "reserve"));
             s.PublishForTest(Render(s));
             int shows = host.ShowCalls;
             SetState(s, "input_boolean.guest", "on");

@@ -73,7 +73,7 @@ namespace TizenNotifier
         public void AmbientDefaultsScale()
         {
             Assert.Equal(2.33, Eff(null, P("theme", "ambient")).Scale);
-            Assert.Equal("reserve", Eff(null, P("theme", "ambient")).Conditionals);
+            Assert.Equal("slide", Eff(null, P("theme", "ambient")).Conditionals);
             Assert.Equal("instant", Eff(null, null).Conditionals);
         }
 
