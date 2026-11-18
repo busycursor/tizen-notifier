@@ -246,7 +246,7 @@ namespace TizenNotifier
             lock (L) entSub = id;
         }
 
-        private void OnEntities(object ev)
+        internal void OnEntities(object ev)
         {
             bool changed = false;
             lock (L)
@@ -255,6 +255,7 @@ namespace TizenNotifier
                     foreach (var kv in add)
                     {
                         var e = new Ent { Id = kv.Key, State = Json.S(kv.Value, "s") };
+                        if (states.TryGetValue(kv.Key, out var was)) Returned(kv.Key, was.State, e.State);
                         e.Attr = Json.O(kv.Value, "a") ?? new Dictionary<string, object>();
                         e.LastChanged = Json.N(kv.Value, "lc", 0); e.LastUpdated = Json.N(kv.Value, "lu", e.LastChanged);
                         states[kv.Key] = e; changed = true;
@@ -267,7 +268,7 @@ namespace TizenNotifier
                         var plus = Json.O(kv.Value, "+");
                         if (plus != null)
                         {
-                            if (Json.Has(plus, "s")) e.State = Json.S(plus, "s");
+                            if (Json.Has(plus, "s")) { Returned(kv.Key, e.State, Json.S(plus, "s")); e.State = Json.S(plus, "s"); }
                             if (Json.O(plus, "a") is Dictionary<string, object> pa) foreach (var a in pa) e.Attr[a.Key] = a.Value;
                             if (Json.Get(plus, "lc") is double lc) { e.LastChanged = lc; e.LastUpdated = lc; }
                             if (Json.Get(plus, "lu") is double lu) e.LastUpdated = lu;
@@ -280,6 +281,18 @@ namespace TizenNotifier
                 if (Json.A(ev, "r") is List<object> rem) foreach (var r in rem) if (r is string k) { states.Remove(k); changed = true; }
             }
             if (changed) Dirty();
+        }
+
+        // Called under L. An entity coming back from unavailable is usually a new entity object (its integration
+        // reloaded): HA's forecast subscriptions to the old one never send again, so subscribe afresh, as the frontend does.
+        private void Returned(string id, string from, string to)
+        {
+            if (from != "unavailable" || to == "unavailable") return;
+            foreach (var key in forecasts.Keys.Where(k => k.StartsWith(id + "|")).ToList())
+            {
+                ForecastResubscribes++;
+                SubscribeForecast(key, id, key.Substring(id.Length + 1));
+            }
         }
 
         // Called under L for every state change: keep graphs, to-dos and calendars current.
@@ -608,14 +621,27 @@ namespace TizenNotifier
             if (Measuring) return forecasts.TryGetValue(key, out var fm) ? fm.f : null;
             if (forecasts.TryGetValue(key, out var f)) { forecasts[key] = (f.sub, f.f, true); return f.f; }
             forecasts[key] = (-1, null, true);
+            SubscribeForecast(key, id, type);
+            return null;
+        }
+
+        internal int ForecastResubscribes;
+
+        // (Re)subscribe to an entity's forecast. What is shown stays until the new subscription's first event; the
+        // subscription it replaces is dropped once the new one is in place.
+        private void SubscribeForecast(string key, string id, string type)
+        {
             Bg(() =>
             {
                 try
                 {
+                    int mine = -1;
                     int sub = Ha.Subscribe(new Dictionary<string, object> { ["type"] = "weather/subscribe_forecast", ["entity_id"] = id, ["forecast_type"] = type }, ev =>
                     {
+                        // an unavailable entity sends no forecast: keep the last one rather than blank the card
+                        if (!(Json.A(ev, "forecast") is List<object> raw)) return;
                         var list = new List<Forecast>();
-                        foreach (var x in Json.A(ev, "forecast") ?? new List<object>())
+                        foreach (var x in raw)
                         {
                             var fc = new Forecast { Condition = Json.S(x, "condition") };
                             if (DateTimeOffset.TryParse(Json.S(x, "datetime"), CultureInfo.InvariantCulture, DateTimeStyles.None, out var dto)) fc.Time = TimeZoneInfo.ConvertTime(dto, Tz).DateTime;
@@ -627,11 +653,17 @@ namespace TizenNotifier
                         lock (L) { if (forecasts.TryGetValue(key, out var cur)) forecasts[key] = (cur.sub, list, cur.used); }
                         Dirty();
                     });
-                    lock (L) { if (forecasts.TryGetValue(key, out var cur)) forecasts[key] = (sub, cur.f, cur.used); }
+                    mine = sub;
+                    int old = -1;
+                    lock (L)
+                    {
+                        if (forecasts.TryGetValue(key, out var cur)) { old = cur.sub; forecasts[key] = (sub, cur.f, cur.used); }
+                        else old = sub;   // gone meanwhile (disconnected): drop this one
+                    }
+                    if (old >= 0 && old != mine) Ha.Unsubscribe(old);
                 }
                 catch (Exception e) { Host.Log("dash forecast " + id + ": " + e.Message); }
             });
-            return null;
         }
 
         // ---------------- render loop ----------------
@@ -981,7 +1013,7 @@ namespace TizenNotifier
                 {
                     ["id"] = Opt.Id, ["dashboard"] = Opt.Dashboard, ["view"] = ViewTitle ?? Opt.View, ["status"] = Status, ["connected"] = Ha.Connected,
                     ["user"] = UserName, ["cards_drawn"] = (double)CardsDrawn, ["unsupported"] = Unsupported.Distinct().Cast<object>().ToList(), ["offscreen"] = Offscreen.Cast<object>().ToList(), ["warnings"] = Warnings.Distinct().Cast<object>().ToList(),
-                    ["error"] = LastError ?? Ha.LastError, ["entities"] = (double)entSet.Count, ["templates"] = (double)templates.Count, ["redraws"] = (double)Shows, ["updates"] = (double)Updates, ["patches"] = (double)Patches, ["hidden"] = Hidden,
+                    ["error"] = LastError ?? Ha.LastError, ["entities"] = (double)entSet.Count, ["templates"] = (double)templates.Count, ["redraws"] = (double)Shows, ["updates"] = (double)Updates, ["patches"] = (double)Patches, ["forecast_resubscribes"] = (double)ForecastResubscribes, ["hidden"] = Hidden,
                     ["last_render"] = LastRender == default(DateTime) ? null : LastRender.ToString("o"),
                 };
         }
