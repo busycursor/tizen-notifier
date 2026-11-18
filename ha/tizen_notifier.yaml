@@ -342,17 +342,21 @@ script:
           - variables: {result: {ok: false, error: "TV is off or unreachable"}}
           - stop: tv off
             response_variable: result
-      - action: rest_command.tizen_notifier_tv_api_post
-        data: {host: "{{ host }}", path: "applications/TizNotify1.notifier"}
-        continue_on_error: true
+      # Right after the TV turns on, its API answers but refuses launches for a while,
+      # so ask again every 5 s until the notifier answers, for up to a minute.
       - repeat:
           sequence:
+            - if: "{{ repeat.index % 5 == 1 }}"
+              then:
+                - action: rest_command.tizen_notifier_tv_api_post
+                  data: {host: "{{ host }}", path: "applications/TizNotify1.notifier"}
+                  continue_on_error: true
             - delay: 1
             - action: rest_command.tizen_notifier_health
               data: {host: "{{ host }}"}
               response_variable: h
               continue_on_error: true
-          until: "{{ (h is defined and h.status == 200) or repeat.index >= 12 }}"
+          until: "{{ (h is defined and h.status == 200) or repeat.index >= 60 }}"
       - variables:
           result: "{{ {'ok': true, 'started': true} if (h is defined and h.status == 200) else {'ok': false, 'error': 'notifier did not start'} }}"
       - stop: done
