@@ -264,10 +264,14 @@ namespace TizenNotifier
             else n.Mx = n.My = (int)Json.N(req, "margin", 60);
             n.Stack = Json.B(req, "stack", true); n.Gap = (int)Json.N(req, "gap", 20);
 
+            var enter = Json.O(req, "enter");
             bool fresh = old == null;
             if (fresh)
             {
-                n.Win = new Surface("tiznotify-" + id, w, h, e => OnKey(n, e), warn);
+                int x = 0, y = 0;
+                if (MotionDuration(enter, true) == 0)
+                    (_, x, y) = Positions(All.Values.Append(n)).Last();
+                n.Win = new Surface("tiznotify-" + id, x, y, w, h, e => OnKey(n, e), warn);
                 All[id] = n;
             }
             else
@@ -296,7 +300,7 @@ namespace TizenNotifier
             n.Win.Add(holder);
             Restack();
             n.Win.Show();
-            if (fresh || Json.B(req, "reanimate", false)) Motion(n, Json.O(req, "enter"), true, null);
+            if (fresh || Json.B(req, "reanimate", false)) Motion(n, enter, true, null);
 
             if (n.Buttons.Count > 0)
             {
@@ -399,12 +403,16 @@ namespace TizenNotifier
             catch (Exception) { }
         }
 
+        private static int MotionDuration(Dictionary<string, object> spec, bool enter) =>
+            string.Equals(Json.S(spec, "type"), "none", StringComparison.OrdinalIgnoreCase)
+                ? 0 : Clamp((int)Json.N(spec, "ms", enter ? 400 : 300), 0, 5000);
+
         private static void Motion(Note n, Dictionary<string, object> spec, bool enter, Action done)
         {
             string type = (Json.S(spec, "type") ?? "slide").ToLowerInvariant();
-            int ms = Clamp((int)Json.N(spec, "ms", enter ? 400 : 300), 0, 5000);
+            int ms = MotionDuration(spec, enter);
             var v = n.Root;
-            if (type == "none" || ms == 0) { done?.Invoke(); return; }
+            if (ms == 0) { done?.Invoke(); return; }
             string from = (Json.S(spec, "from") ?? DefaultFrom(n.Anchor)).ToLowerInvariant();
             float dx = 0, dy = 0;
             if (type == "slide")
@@ -439,8 +447,13 @@ namespace TizenNotifier
         // Position every window: absolute ones as given, anchored ones stacked in arrival order.
         private static void Restack()
         {
+            foreach (var (note, x, y) in Positions(All.Values)) MoveTo(note, x, y);
+        }
+
+        private static IEnumerable<(Note note, int x, int y)> Positions(IEnumerable<Note> notes)
+        {
             var offs = new Dictionary<string, int>();
-            foreach (var n in All.Values.Where(x => !x.Closing).OrderBy(x => x.Seq))
+            foreach (var n in notes.Where(x => !x.Closing).OrderBy(x => x.Seq))
             {
                 int x, y;
                 if (n.Absolute) { x = n.X; y = n.Y; }
@@ -457,7 +470,7 @@ namespace TizenNotifier
                         offs[a] = o + n.H + n.Gap;
                     }
                 }
-                MoveTo(n, x, y);
+                yield return (n, x, y);
             }
         }
 
