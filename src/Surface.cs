@@ -20,10 +20,10 @@ namespace TizenNotifier
         private readonly View box;
         private bool shown;
 
-        public Surface(string name, int w, int h, Action<Window.KeyEventArgs> onKey, List<object> warn)
+        public Surface(string name, int x, int y, int w, int h, Action<Window.KeyEventArgs> onKey, List<object> warn)
         {
             this.onKey = onKey;
-            box = new View { Name = name, Size = new Size(w, h, 0), Position = new Position(0, 0, 0), BackgroundColor = Color.Transparent };
+            box = new View { Name = name, Size = new Size(w, h, 0), Position = new Position(x, y, 0), BackgroundColor = Color.Transparent };
             box.Hide();
             Window.Instance.GetDefaultLayer().Add(box);
             if (!hooked) { hooked = true; Window.Instance.KeyEvent += (s, e) => { if (Focused.Count > 0) Focused[Focused.Count - 1].onKey(e); }; }
@@ -137,10 +137,10 @@ namespace TizenNotifier
 #else
         private readonly Window win;
 
-        public Surface(string name, int w, int h, Action<Window.KeyEventArgs> onKey, List<object> warn)
+        public Surface(string name, int x, int y, int w, int h, Action<Window.KeyEventArgs> onKey, List<object> warn)
         {
             this.onKey = onKey;
-            win = new Window(name, new Rectangle(0, 0, w, h), true);
+            win = new Window(name, new Rectangle(x, y, w, h), true);
             try { win.Type = WindowType.Notification; } catch (Exception e) { warn.Add("window type: " + e.Message); }
             try { win.BackgroundColor = Color.Transparent; win.SetTransparency(true); } catch (Exception e) { warn.Add("transparency: " + e.Message); }
             try { win.SetOpaqueState(false); } catch (Exception e) { warn.Add("opaque: " + e.Message); }
