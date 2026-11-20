@@ -16,6 +16,7 @@ usage() { sed -n 3,4p "$0" | sed 's/^# *//'; exit 2; }
 : "${TOKEN_FILE:=$HERE/secrets/token-{tv}}"             # per-TV token; created on first build
 : "${ALLOW:=}"                                           # comma-separated hosts the TV may fetch from / call back to
 : "${TIZEN5_TVS:=}"                                      # space-separated TV names that run Tizen 5
+: "${MAIN_WINDOW_TVS:=}"                                  # space-separated TV names that use the shared main window
 : "${HA_URL:=}"                                          # Home Assistant base URL for dashboards (optional)
 : "${HA_TOKEN_FILE:=}"                                   # per-TV token of a non-admin HA user; {tv} = TV name
 : "${RELAY_URL:=}"                                       # video relay base URL (relay/; optional)
@@ -44,6 +45,8 @@ case "$cmd" in
     fi
     tfm=tizen80
     for t in $TIZEN5_TVS; do [ "$t" = "$tv" ] && tfm=tizen50; done
+    use_main_window=false
+    for t in $MAIN_WINDOW_TVS; do [ "$t" = "$tv" ] && use_main_window=true; done
     ver=$(sed -n 's/.*package="TizNotify1" version="\([^"]*\)".*/\1/p' "$HERE/src/tizen-manifest.xml")
     [ -n "$ver" ] || { echo "no version in src/tizen-manifest.xml" >&2; exit 1; }
 
@@ -83,7 +86,7 @@ if [ "$tfm" = tizen50 ]; then
   sed -i 's/api-version="6.0"/api-version="5.0"/' src/tizen-manifest.xml
 fi
 cd src
-dotnet build -c Release -nologo -v minimal >&2 || { rm -rf /work/cert; exit 1; }
+dotnet build -c Release -nologo -v minimal -p:UseMainWindow=$use_main_window >&2 || { rm -rf /work/cert; exit 1; }
 rm -rf /work/cert
 cat bin/Release/$tfm/TizNotify1-$ver.tpk
 EOF

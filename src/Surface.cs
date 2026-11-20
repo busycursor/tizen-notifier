@@ -1,7 +1,6 @@
 // Where a note is drawn.
-//   Tizen 6+ (default build): one transparent, non-focusable Notification-type Window per note (proven on the Frames).
-//   Tizen 5 (TIZEN5 build): NUI API5 cannot create extra windows, so every note is a View inside the
-//   app's own window, which is made a Notification window and grows to full screen only while a note is showing.
+//   Tizen 6+ by default: one transparent Notification window per note.
+//   Tizen 5 and main-window builds: each note is a view inside the app's own Notification window.
 using System;
 using System.Collections.Generic;
 using Tizen.NUI;
@@ -13,7 +12,7 @@ namespace TizenNotifier
     internal sealed class Surface
     {
         private readonly Action<Window.KeyEventArgs> onKey;
-#if TIZEN5
+#if TIZEN5 || MAIN_WINDOW_HOST
         private static readonly List<Surface> Shown = new List<Surface>();
         private static readonly List<Surface> Focused = new List<Surface>();
         private static bool hooked;
@@ -25,14 +24,14 @@ namespace TizenNotifier
             this.onKey = onKey;
             box = new View { Name = name, Size = new Size(w, h, 0), Position = new Position(0, 0, 0), BackgroundColor = Color.Transparent };
             box.Hide();
-            Window.Instance.GetDefaultLayer().Add(box);
-            if (!hooked) { hooked = true; Window.Instance.KeyEvent += (s, e) => { if (Focused.Count > 0) Focused[Focused.Count - 1].onKey(e); }; }
+            App.MainWin.GetDefaultLayer().Add(box);
+            if (!hooked) { hooked = true; App.MainWin.KeyEvent += (s, e) => { if (Focused.Count > 0) Focused[Focused.Count - 1].onKey(e); }; }
         }
 
         // Host window: transparent Notification window, 1x1 while idle, full screen while any note is up.
         public static void SetupHost()
         {
-            var w = Window.Instance;
+            var w = App.MainWin;
             try { w.BackgroundColor = Color.Transparent; w.SetTransparency(true); } catch (Exception e) { Log.W("host transparency: " + e.Message); }
             try { w.SetAcceptFocus(false); } catch (Exception e) { Log.W("host focus: " + e.Message); }
             try { w.Type = WindowType.Notification; } catch (Exception e) { Log.W("host type: " + e.Message); }
@@ -45,18 +44,18 @@ namespace TizenNotifier
 
         private static void Idle()
         {
-            try { Window.Instance.WindowSize = new Size2D(1, 1); Window.Instance.WindowPosition = new Position2D(0, 0); } catch (Exception e) { Log.W("host idle size: " + e.Message); }
+            try { App.MainWin.WindowSize = new Size2D(1, 1); App.MainWin.WindowPosition = new Position2D(0, 0); } catch (Exception e) { Log.W("host idle size: " + e.Message); }
         }
 
         private static void Full()
         {
-            try { Window.Instance.WindowPosition = new Position2D(0, 0); Window.Instance.WindowSize = new Size2D(1920, 1080); } catch (Exception e) { Log.W("host full size: " + e.Message); }
+            try { App.MainWin.WindowPosition = new Position2D(0, 0); App.MainWin.WindowSize = new Size2D(1920, 1080); } catch (Exception e) { Log.W("host full size: " + e.Message); }
         }
 
         // Diagnostics: report the host window, and run actions on it (POST /host {"actions": [...]}).
         public static Dictionary<string, object> Host(List<object> actions)
         {
-            var w = Window.Instance;
+            var w = App.MainWin;
             var done = new List<object>();
             if (actions != null)
                 foreach (var a in actions)
@@ -126,12 +125,12 @@ namespace TizenNotifier
         {
             Focused.Remove(this);
             if (take) Focused.Add(this);
-            try { Window.Instance.SetAcceptFocus(Focused.Count > 0); if (take) Window.Instance.Raise(); } catch (Exception e) { Log.W("host focus: " + e.Message); }
+            try { App.MainWin.SetAcceptFocus(Focused.Count > 0); if (take) App.MainWin.Raise(); } catch (Exception e) { Log.W("host focus: " + e.Message); }
         }
         public void Dispose()
         {
             Hide(); Focus(false);
-            try { Window.Instance.GetDefaultLayer().Remove(box); box.Dispose(); } catch (Exception) { }
+            try { App.MainWin.GetDefaultLayer().Remove(box); box.Dispose(); } catch (Exception) { }
         }
         public static Size2D Screen() => new Size2D(1920, 1080);
 #else
@@ -149,7 +148,7 @@ namespace TizenNotifier
         }
 
         public static void SetupHost() { }
-        public static Dictionary<string, object> Host(List<object> actions) => new Dictionary<string, object> { ["ok"] = false, ["error"] = "only on the Tizen 5 build" };
+        public static Dictionary<string, object> Host(List<object> actions) => new Dictionary<string, object> { ["ok"] = false, ["error"] = "requires a main-window build" };
         public void Add(View v) => win.Add(v);
         public void Remove(View v) => win.Remove(v);
         public void Show() => win.Show();
