@@ -67,7 +67,7 @@ curl -sS -X POST http://<tv-ip>:9123/notify \
 | POST | `/update` | `{id, nodes, duration?}` (section 9) | changes named nodes of a message on screen |
 | POST | `/dismiss` | `{"id": "..."}` or `{"all": true}` | `{ok, closed: <count>}` |
 | POST | `/config` | `{"allow": ["host", "host:port", ...]}` | replaces and saves the allow list |
-| POST | `/host` | `{"actions": [...]}` | T5 only: diagnostics for the shared host window |
+| POST | `/host` | `{"actions": [...]}` | diagnostics for the shared host window in main-window builds |
 | POST | `/play` | `{src, ...}` (section 12) | play a video through the relay: full screen or a window |
 | POST | `/dashboard` | `{dashboard, ...}` (section 13) | show a Home Assistant dashboard, live |
 | GET | `/dashboard` | none | dashboard sessions and their status |
@@ -108,7 +108,7 @@ For a fetched URL, the file type comes from the response `Content-Type`, then fr
 | `x`, `y` | number | none | absolute window position. Giving either one turns off `anchor` and stacking. |
 | `stack` | bool | `true` | messages on the same **`top*` or `bottom*`** anchor stack instead of overlapping. `left`, `center`, `right` never stack. |
 | `gap` | number | `20` | space between stacked messages |
-| `level` | string | `"base"` | window layer: `base`, `medium`, `high`, `top`. Ignored on T5. |
+| `level` | string | `"base"` | window layer `base`, `medium`, `high`, or `top` for builds with separate windows. Main-window builds share the `base` level. |
 | `enter` | object | slide, 400 ms | entrance motion (section 8) |
 | `exit` | object | same as `enter`, 300 ms | exit motion (section 8) |
 | `reanimate` | bool | `false` | when replacing by `id`, play the `enter` motion again |

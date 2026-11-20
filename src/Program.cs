@@ -203,15 +203,15 @@ namespace TizenNotifier
         // non-focusable and sent behind everything.
         private static void HideMain()
         {
-#if TIZEN5
-            Surface.SetupHost();   // Tizen 5: the app's own window IS the overlay host
-            return;
-#endif
+#if TIZEN5 || MAIN_WINDOW_HOST
+            Surface.SetupHost();
+#else
             try { MainWin.BackgroundColor = Color.Transparent; } catch (Exception e) { Log.W("main bg: " + e.Message); }
             try { MainWin.SetTransparency(true); } catch (Exception e) { Log.W("main transparency: " + e.Message); }
             try { MainWin.SetOpaqueState(false); } catch (Exception e) { Log.W("main opaque: " + e.Message); }
             try { MainWin.SetAcceptFocus(false); } catch (Exception e) { Log.W("main focus: " + e.Message); }
             try { MainWin.Lower(); } catch (Exception e) { Log.W("main lower: " + e.Message); }
+#endif
         }
 
         protected override void OnAppControlReceived(AppControlReceivedEventArgs e)

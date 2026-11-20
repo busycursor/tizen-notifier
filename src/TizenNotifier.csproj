@@ -11,6 +11,9 @@
     <DistributorPath>/work/cert/distributor.p12</DistributorPath>
     <DistributorPass>$([System.IO.File]::ReadAllText('/work/cert/password').Trim())</DistributorPass>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(UseMainWindow)' == 'true'">
+    <DefineConstants>$(DefineConstants);MAIN_WINDOW_HOST</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Tizen.NET" Version="8.0.0.*" />
     <PackageReference Include="NLayer" Version="3.0.1" />

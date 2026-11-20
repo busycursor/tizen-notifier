@@ -28,8 +28,8 @@ Samsung **Partner**-level certificate. This requires logging into your Samsung a
 ## How it works
 
 - The app has no screen of its own: its main window is transparent, non-focusable and kept out of the way.
-- **Tizen 6+**: each message is its own small `Notification` window, positioned on screen.
-- **Tizen 5**: NUI API5 cannot create extra windows, so every message is a view inside the app's single main window.
+- **Tizen 6+ by default**: each message is its own small `Notification` window, positioned on screen.
+- **Tizen 5 and TVs listed in `MAIN_WINDOW_TVS`**: every message is a view inside the app's single main window.
   That window is made a `Notification` window. It is 1×1 pixel when idle and full screen only while a message is up.
 - An HTTP server on the TV (port **9123**) takes JSON requests. Every request except `GET /health` needs
   `Authorization: Bearer <token>`. The token is per TV and baked into that TV's build.
@@ -74,6 +74,8 @@ Copy `build.env.example` to `build.env` (ignored by git) and set at least `CERT_
 
 - `<tv>` is a name of your choosing (`living_room`). The first build of a TV creates its token at `TOKEN_FILE`; put the
   same token in Home Assistant's `secrets.yaml`. List Tizen 5 TVs in `TIZEN5_TVS`.
+- If a Tizen 6+ TV sometimes shows a blank camera overlay, add its build name to `MAIN_WINDOW_TVS` in `build.env`
+  (for example, `MAIN_WINDOW_TVS="living_room"`) and rebuild.
 - The source and certificates are streamed into the build container on stdin, with no bind mounts, so
   `BUILD_DOCKER` can be any command that runs Docker, local or remote (`docker`, `ssh buildhost docker`, ...).
   The certificates exist only inside the container while it builds.
@@ -107,7 +109,7 @@ Details:
 | POST | `/update` | `{id, nodes: {<name>: {props}}, duration?}`: change named nodes live |
 | POST | `/dismiss` | `{id}` or `{all: true}` |
 | POST | `/config` | `{allow: [hosts]}`: persist the allow list |
-| POST | `/host` | Tizen 5 build only: report or drive the shared host window (diagnostics) |
+| POST | `/host` | Report or drive the shared host window in main-window builds |
 
 **The full request reference, with every property, tested recipes, the button rules, video (`/play`) and dashboards, is
 [usage.md](usage.md).** In short:
